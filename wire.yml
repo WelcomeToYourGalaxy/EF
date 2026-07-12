@@ -1,0 +1,26 @@
+name: Harvest resistance wire
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install feedparser
+      - name: Harvest wire.json
+        run: python wire_harvest.py
+      - name: Commit if changed
+        run: |
+          git config user.name  "wire-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add wire.json
+          git diff --staged --quiet || git commit -m "chore: refresh wire.json"
+          git push

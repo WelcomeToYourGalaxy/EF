@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Live Projects to Resist</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root{ --accent:#3fa66a; --bg:#0e131e; --panel:rgba(14,19,30,0.94); --ink:#e7edf5; --muted:#9fb0c3; }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  #map{position:absolute;inset:0;background:#0b0f18;}
+  .leaflet-popup-content-wrapper{background:var(--panel);color:var(--ink);border:1px solid rgba(63,166,106,0.5);border-radius:10px;}
+  .leaflet-popup-tip{background:var(--panel);}
+  .pj-title{font-weight:700;font-size:15px;margin:0 0 3px;color:#fff;}
+  .pj-meta{font-size:11.5px;color:var(--muted);margin:0 0 6px;}
+  .pj-stars{color:#ffcf5c;letter-spacing:1px;font-size:13px;}
+  .pj-desc{font-size:12.5px;line-height:1.45;margin:6px 0 0;}
+  .pj-type{display:inline-block;background:rgba(63,166,106,0.18);border:1px solid rgba(63,166,106,0.5);border-radius:20px;padding:1px 8px;font-size:10.5px;color:#bfe6cf;margin-right:5px;}
+  #head{position:absolute;top:12px;left:12px;z-index:1000;background:var(--panel);border:1px solid rgba(63,166,106,0.4);border-radius:12px;padding:12px 14px;max-width:330px;backdrop-filter:blur(10px);box-shadow:0 8px 28px rgba(0,0,0,0.5);}
+  #head h1{font-size:15px;margin:0 0 4px;color:#fff;}
+  #head p{font-size:11.5px;color:var(--muted);margin:0 0 8px;line-height:1.4;}
+  #head .row{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);}
+  #minRate{flex:1;}
+  #legend{position:absolute;bottom:14px;left:12px;z-index:1000;background:var(--panel);border:1px solid rgba(63,166,106,0.4);border-radius:12px;padding:10px 12px;font-size:11px;color:var(--muted);backdrop-filter:blur(10px);}
+  #legend b{color:var(--ink);}
+  .lg{display:flex;align-items:center;gap:7px;margin-top:5px;}
+  .dot{border-radius:50%;display:inline-block;}
+  #count{position:absolute;top:12px;right:12px;z-index:1000;background:var(--panel);border:1px solid rgba(63,166,106,0.4);border-radius:20px;padding:6px 13px;font-size:12px;color:var(--ink);backdrop-filter:blur(10px);}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="head">
+  <h1>&#127795; Live Projects to Resist</h1>
+  <p>Proposed and active developments threatening environmentally significant places &mdash; sized and colored by impact. Click a marker to see the fight and where to plug in.</p>
+  <div class="row"><span>Min impact</span><input id="minRate" type="range" min="1" max="5" value="1"/><span id="minRateVal">1+</span></div>
+</div>
+<div id="count">&hellip;</div>
+<div id="legend">
+  <b>Impact rating</b>
+  <div class="lg"><span class="dot" style="width:22px;height:22px;background:#c0392b;"></span> 5 &mdash; landscape / national</div>
+  <div class="lg"><span class="dot" style="width:18px;height:18px;background:#e67e22;"></span> 4 &mdash; major</div>
+  <div class="lg"><span class="dot" style="width:14px;height:14px;background:#e6b800;"></span> 3 &mdash; regional</div>
+  <div class="lg"><span class="dot" style="width:11px;height:11px;background:#7cb342;"></span> 2 &mdash; local</div>
+  <div class="lg"><span class="dot" style="width:8px;height:8px;background:#3fa66a;"></span> 1 &mdash; minor</div>
+</div>
+<script>
+// Embedded seed so the map runs standalone; in production projects.json (from the harvester) overrides this.
+const SEED = {"projects":[
+ {"name":"Mountain Valley Pipeline","type":"Gas pipeline","state":"VA / WV","lat":37.22,"lng":-80.42,"size":"~303 miles","impact":5,"status":"Under construction / contested","company":"Equitrans Midstream","desc":"A 303-mile fracked-gas pipeline crossing hundreds of Appalachian streams. Southgate extension into NC still contested. WHY RUN TO IT: water crossings and the Southgate permit are live pressure points."},
+ {"name":"Thacker Pass Lithium Mine","type":"Lithium mine","state":"NV","lat":41.70,"lng":-118.05,"size":"~5,700 acres","impact":5,"status":"Under construction, litigated","company":"Lithium Americas","desc":"The largest US lithium mine, on land sacred to Paiute-Shoshone people and sage-grouse habitat. WHY RUN TO IT: ongoing ESA/NHPA litigation and tribal-consultation fights."},
+ {"name":"Enbridge Line 5 (Straits of Mackinac)","type":"Oil pipeline","state":"MI","lat":45.82,"lng":-84.74,"size":"Twin lines + tunnel","impact":5,"status":"Operating; tunnel contested","company":"Enbridge","desc":"A 70-year-old oil pipeline on the bottom of the Great Lakes, plus a proposed tunnel. WHY RUN TO IT: state permits, tribal treaty rights and the Army Corps review are open fronts."},
+ {"name":"Calcasieu Pass 2 (CP2 LNG)","type":"LNG export terminal","state":"LA","lat":29.80,"lng":-93.34,"size":"~20 MTPA","impact":5,"status":"Permitting / partly paused","company":"Venture Global","desc":"A massive LNG export terminal in Cameron Parish wetlands \u2014 a flashpoint of the Gulf LNG buildout. WHY RUN TO IT: FERC and DOE export authorizations are contested."},
+ {"name":"Formosa Plastics \u2018Sunshine Project\u2019","type":"Petrochemical","state":"LA","lat":30.03,"lng":-90.80,"size":"14 plants","impact":5,"status":"Air permit litigated","company":"Formosa Plastics","desc":"A giant petrochemical complex in St. James Parish (\u2018Cancer Alley\u2019). WHY RUN TO IT: air-permit challenges and environmental-justice review are active."},
+ {"name":"Willow Project","type":"Oil development","state":"AK","lat":70.20,"lng":-151.90,"size":"~600M barrels","impact":5,"status":"Approved, litigated","company":"ConocoPhillips","desc":"A major oil development in the National Petroleum Reserve-Alaska. WHY RUN TO IT: ongoing litigation over the BLM approval and subsistence impacts."},
+ {"name":"Atlanta Training Center (\u2018Cop City\u2019)","type":"Development","state":"GA","lat":33.69,"lng":-84.24,"size":"~85 acres forest","impact":4,"status":"Under construction, contested","company":"Atlanta Police Foundation","desc":"A police campus cleared from the Weelaunee/South River Forest. WHY RUN TO IT: land-use permits, a referendum fight and forest defense are ongoing."},
+ {"name":"Resolution Copper Mine (Oak Flat)","type":"Copper mine","state":"AZ","lat":33.31,"lng":-111.05,"size":"~2-mi subsidence","impact":5,"status":"Land-swap litigated","company":"Rio Tinto / BHP","desc":"A block-cave copper mine that would swallow Oak Flat, sacred to the San Carlos Apache. WHY RUN TO IT: the federal land exchange and its EIS are in active litigation."},
+ {"name":"Pebble Mine","type":"Gold/copper mine","state":"AK","lat":59.90,"lng":-155.30,"size":"Headwaters open-pit","impact":5,"status":"EPA-vetoed, still pursued","company":"Northern Dynasty","desc":"A proposed mine in the headwaters of Bristol Bay, the world\u2019s largest sockeye fishery. WHY RUN TO IT: developers keep seeking to overturn the EPA Clean Water Act veto."}
+]};
+const COLORS={5:"#c0392b",4:"#e67e22",3:"#e6b800",2:"#7cb342",1:"#3fa66a"};
+const RADIUS={5:16,4:13,3:10,2:8,1:6};
+const map=L.map("map",{worldCopyJump:true}).setView([39.5,-98.5],4);
+L.tileLayer("https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png",{maxZoom:12,attribution:"&copy; OpenStreetMap &copy; CARTO"}).addTo(map);
+let ALL=[], markers=[];
+function stars(n){return "\u2605".repeat(n)+"\u2606".repeat(5-n);}
+function render(min){
+  markers.forEach(m=>map.removeLayer(m)); markers=[];
+  let shown=0;
+  ALL.forEach(p=>{
+    if((p.impact||1)<min) return;
+    const c=COLORS[p.impact]||"#3fa66a", r=RADIUS[p.impact]||6;
+    const mk=L.circleMarker([p.lat,p.lng],{radius:r,color:c,weight:1.5,fillColor:c,fillOpacity:0.55}).addTo(map);
+    mk.bindPopup(
+      '<div class="pj-title">'+p.name+'</div>'+
+      '<div class="pj-meta"><span class="pj-type">'+(p.type||"Project")+'</span>'+(p.state||"")+(p.company?' \u00b7 '+p.company:"")+'</div>'+
+      '<div class="pj-stars" title="impact '+p.impact+'/5">'+stars(p.impact||1)+'</div>'+
+      '<div class="pj-desc">'+(p.desc||"")+'</div>'+
+      (p.size?'<div class="pj-meta" style="margin-top:6px">Scale: '+p.size+(p.status?' \u00b7 '+p.status:"")+'</div>':"")
+    );
+    markers.push(mk); shown++;
+  });
+  document.getElementById("count").textContent=shown+" projects";
+}
+function boot(data){ ALL=(data&&data.projects)||[]; render(1); }
+// production: load harvested projects.json; fallback to embedded seed
+fetch("projects.json").then(r=>r.ok?r.json():Promise.reject()).then(boot).catch(()=>boot(SEED));
+const mr=document.getElementById("minRate"), mv=document.getElementById("minRateVal");
+mr.addEventListener("input",()=>{mv.textContent=mr.value+"+";render(+mr.value);});
+</script>
+</body>
+</html>

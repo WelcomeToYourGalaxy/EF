@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""
+harvest_projects.py  --  builds projects.json for the Live Projects map.
+
+RUN ENVIRONMENT: GitHub Actions (scheduled), NOT the build sandbox.
+The sandbox network is locked to package registries; this script needs open-web
+access, so it runs in your repo's Actions runner (like wire_harvest.py).
+
+DELIBERATELY EXCLUDES ConstructConnect / Dodge: those are paywalled commercial
+products with no public API. Scraping them violates their ToS. We use OPEN data
+instead, which is also better targeted (projects that threaten significant places,
+not strip-mall bid leads).
+
+SOURCES (all open):
+  - Municipal building-permit open data  (Socrata SODA API)  -> LOCAL projects
+  - Global Energy Monitor trackers        (downloadable data) -> energy/fossil infra
+  - Land Matrix                           (public API)        -> large land deals
+  - EJAtlas                               (data export)       -> documented conflicts
+  - EPA EIS database / FERC eLibrary      (gov data)          -> federal review pipeline
+
+Each source fetcher returns a list of normalized dicts:
+  {name,type,state,lat,lng,size,status,company,desc,source}
+rate_project() then assigns impact 1-5. Records without lat/lng are skipped
+(the map needs a point). Output is written to projects.json.
+"""
+import json, sys, datetime, urllib.request, urllib.parse
+
+UA = "activist-projects-harvester (contact: wheelock.chris@gmail.com)"
+TIMEOUT = 30
+
+# ----------------------------------------------------------------------------
+# IMPACT RATING  (1 minor .. 5 landscape/nationally significant)
+# ----------------------------------------------------------------------------
+# Type weight: fossil/extractive/petrochemical infrastructure scores highest
+# because it does the most irreversible harm to significant places.
+TYPE_WEIGHT = {
+    "lng": 5, "petrochemical": 5, "refinery": 5, "coal": 5, "oil": 5, "gas": 4,
+    "pipeline": 4, "mine": 5, "mining": 5, "lithium": 4, "power plant": 4,
+    "dam": 4, "highway": 3, "landfill": 3, "data center": 3, "warehouse": 2,
+    "logging": 4, "timber": 4, "cafo": 3, "feedlot": 3, "subdivision": 2,
+    "commercial": 1, "residential": 1, "development": 2,
+}
+
+def _type_score(type_str):
+    t = (type_str or "").lower()
+    best = 1
+    for k, w in TYPE_WEIGHT.items():
+        if k in t:
+            best = max(best, w)
+    return best
+
+def _magnitude_score(size_str, value_usd=None, acres=None, mw=None, miles=None):
+    """Rough 1-5 from whatever magnitude field is available."""
+    if value_usd:
+        if value_usd >= 1e9:  return 5
+        if value_usd >= 2.5e8: return 4
+        if value_usd >= 5e7:  return 3
+        if value_usd >= 5e6:  return 2
+        return 1
+    if acres:
+        if acres >= 2000: return 5
+        if acres >= 500:  return 4
+        if acres >= 100:  return 3
+        if acres >= 20:   return 2
+        return 1
+    if mw:   return 5 if mw >= 500 else 4 if mw >= 100 else 3
+    if miles:return 5 if miles >= 100 else 4 if miles >= 25 else 3
+    return 0  # unknown magnitude
+
+def rate_project(p, sensitivity=0):
+    """Combine type + magnitude + ecological/EJ sensitivity into 1-5."""
+    ts = _type_score(p.get("type"))
+    ms = _magnitude_score(p.get("size"), p.get("value_usd"), p.get("acres"),
+                          p.get("mw"), p.get("miles"))
+    # base: lean on type, lifted by magnitude when known
+    base = ts if ms == 0 else round((ts * 0.6) + (ms * 0.4))
+    base += sensitivity  # +1 if near protected land/water or an EJ community
+    return max(1, min(5, base))
+
+# ----------------------------------------------------------------------------
+# HELPERS
+# ----------------------------------------------------------------------------
+def _get_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+def _num(x):
+    try: return float(x)
+    except (TypeError, ValueError): return None
+
+def _first(row, *names):
+    for n in names:
+        if n in row and row[n] not in (None, ""): return row[n]
+    return None
+
+# ----------------------------------------------------------------------------
+# SOURCE 1 -- Municipal building permits via Socrata (SODA API)   [LOCAL]
+# ----------------------------------------------------------------------------
+# Socrata is JSON, no key required for modest volume. Each city exposes a
+# dataset; confirm the domain + dataset id + column names per city (they vary),
+# then add to SOCRATA_CITIES. The three below are the PATTERN -- verify the
+# dataset ids and field names against each portal before trusting them.
+SOCRATA_CITIES = [
+    # --- VERIFIED (dataset id + field names confirmed against live CSV headers) ---
+    # The $-value filter surfaces SIGNIFICANT projects (big developments), not every
+    # roof/deck permit. Tune the threshold and date as you like.
+    {"city": "Chicago, IL", "domain": "data.cityofchicago.org", "dataset": "ydr8-5enu",
+     "lat": "latitude", "lng": "longitude", "name": "work_description", "type": "permit_type",
+     "value": "reported_cost", "status": "permit_status",
+     "where": "reported_cost > 5000000 AND issue_date > '2025-01-01'"},
+    {"city": "Austin, TX", "domain": "data.austintexas.gov", "dataset": "3syk-w9eu",
+     "lat": "latitude", "lng": "longitude", "name": "description", "type": "permit_class",
+     "value": "total_job_valuation", "status": "status_current",
+     "where": "total_job_valuation > 5000000 AND issued_date > '2025-01-01'"},
+    {"city": "Seattle, WA", "domain": "data.seattle.gov", "dataset": "76t5-zqzr",
+     "lat": "latitude", "lng": "longitude", "name": "description", "type": "permitclassmapped",
+     "value": "estprojectcost", "status": "statuscurrent",
+     "where": "estprojectcost > 5000000 AND issueddate > '2025-01-01'"},
+
+    # SF: coords live in a `location` POINT column (verified against live CSV).
+    {"city": "San Francisco, CA", "domain": "data.sfgov.org", "dataset": "i98e-djp9",
+     "point": "location", "name": "description", "type": "permit_type_definition",
+     "value": "estimated_cost", "status": "status",
+     "where": "estimated_cost > 5000000 AND issued_date > '2025-01-01'"},
+
+    # --- DATASET ID CONFIRMED, FIELD NAMES TO VERIFY before enabling ---
+    # LA: coords in a Location column "Latitude/Longitude" -> field `latitude_longitude`
+    # (verified against live CSV headers; parsed by _socrata_point's dict branch).
+    {"city": "Los Angeles, CA", "domain": "data.lacity.org", "dataset": "pi9x-tg5x",
+     "point": "latitude_longitude", "name": "work_description", "type": "permit_type",
+     "value": "valuation", "status": "status",
+     "where": "valuation > 5000000 AND issue_date > '2025-01-01'"},
+
+    # --- MORE CITIES: same pattern -- confirm dataset id + field names, then add ---
+    # NYC: permits are split across DOB NOW + historical datasets and need lat/lng joined
+    # from BIN/BBL -- add once you pick the geocoded dataset.
+]
+
+def _socrata_point(r, cfg):
+    """Return (lat,lng). Some cities (SF, LA) use a point column instead of
+    separate lat/lng columns -- either a WKT 'POINT (lng lat)' string or a
+    GeoJSON dict. Configure cfg['point'] for those; otherwise use lat/lng cols."""
+    pf = cfg.get("point")
+    if pf and r.get(pf) is not None:
+        v = r.get(pf)
+        if isinstance(v, dict):
+            c = v.get("coordinates")
+            if c and len(c) >= 2: return _num(c[1]), _num(c[0])
+            if v.get("latitude") and v.get("longitude"):
+                return _num(v["latitude"]), _num(v["longitude"])
+        elif isinstance(v, str) and v.upper().startswith("POINT"):
+            nums = v.replace("POINT", "").replace("(", "").replace(")", "").split()
+            if len(nums) >= 2: return _num(nums[1]), _num(nums[0])
+    if cfg.get("lat") and cfg.get("lng"):
+        return _num(r.get(cfg["lat"])), _num(r.get(cfg["lng"]))
+    return None, None
+
+def fetch_socrata(cfg, limit=500):
+    out = []
+    base = "https://{d}/resource/{ds}.json".format(d=cfg["domain"], ds=cfg["dataset"])
+    params = {"$limit": limit, "$order": ":id"}
+    if cfg.get("where"): params["$where"] = cfg["where"]
+    url = base + "?" + urllib.parse.urlencode(params)
+    try:
+        rows = _get_json(url)
+    except Exception as e:
+        print("  socrata %s failed: %s" % (cfg.get("city"), e)); return out
+    for r in rows:
+        lat, lng = _socrata_point(r, cfg)
+        if lat is None or lng is None: continue
+        val = _num(r.get(cfg.get("value")))
+        p = {"name": r.get(cfg["name"]) or "Permitted project",
+             "type": r.get(cfg.get("type")) or "development",
+             "state": cfg["city"].split(",")[-1].strip(),
+             "lat": lat, "lng": lng, "value_usd": val,
+             "status": r.get(cfg.get("status")) or "permitted",
+             "company": "", "size": ("$%s" % int(val)) if val else "",
+             "desc": "Local permit filing. Verify scope, then check the "
+                     "jurisdiction's planning docket for hearings and comment windows.",
+             "source": "socrata:" + cfg["domain"]}
+        p["impact"] = rate_project(p)
+        out.append(p)
+    return out
+
+# ----------------------------------------------------------------------------
+# SOURCE 2 -- Land Matrix (public API)                           [GLOBAL]
+# ----------------------------------------------------------------------------
+# Land Matrix exposes deal data via API. Confirm the current endpoint/shape at
+# https://landmatrix.org/ (they have a REST/GraphQL interface). Sketch:
+def fetch_land_matrix(csv_path="data/land_matrix_deals.csv"):
+    """Large-scale land acquisitions WITH coordinates.
+    Get the CSV from datahub.io/core/land-matrix (weekly auto-updated) or the
+    Land Matrix API export and save it to data/land_matrix_deals.csv. Export
+    column names vary, so several aliases are tried."""
+    import csv, os
+    out = []
+    if not os.path.exists(csv_path):
+        print("  land matrix: %s not found (skip)" % csv_path); return out
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            lat = _num(_first(row, "point_lat", "latitude", "lat", "deal_lat"))
+            lng = _num(_first(row, "point_lon", "longitude", "lng", "lon", "deal_lon"))
+            if lat is None or lng is None: continue
+            ha = _num(_first(row, "deal_size", "size", "intended_size", "contract_size"))
+            p = {"name": (_first(row, "deal_name", "name") or "Large land acquisition")[:120],
+                 "type": _first(row, "current_intention_of_investment", "intention", "intended_use") or "land deal",
+                 "state": _first(row, "target_country", "country") or "",
+                 "lat": lat, "lng": lng, "acres": ha * 2.471 if ha else None,
+                 "company": _first(row, "operating_company", "investor", "operating_company_name") or "",
+                 "status": _first(row, "negotiation_status", "current_negotiation_status") or "",
+                 "size": ("%s ha" % int(ha)) if ha else "",
+                 "desc": "Large-scale land acquisition tracked by Land Matrix. Verify status "
+                         "and investor, then check for community-consent and land-rights issues.",
+                 "source": "land_matrix"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+    print("  land matrix: %d deals" % len(out))
+    return out
+
+# ----------------------------------------------------------------------------
+# SOURCE 3 -- Global Energy Monitor trackers                     [ENERGY INFRA]
+# ----------------------------------------------------------------------------
+# GEM publishes downloadable trackers (Excel/CSV) under a data-use policy at
+# globalenergymonitor.org/projects/. Pipeline: download the relevant tracker(s),
+# read with pandas, keep US rows with coords, map columns -> normalized dict.
+def _gem_norm(pr, lat, lng):
+    if lat is None or lng is None: return None
+    name = _first(pr, "Project Name", "project_name", "Unit Name", "Name",
+                  "Pipeline Name", "Mine Name")
+    typ = _first(pr, "Type", "Fuel", "Category", "Sector") or "energy infrastructure"
+    st = _first(pr, "Subnational unit (province/state)", "State/Province", "State", "Region")
+    ctry = _first(pr, "Country/Area", "Country")
+    mw = _num(_first(pr, "Capacity (MW)", "Capacity", "capacity_mw"))
+    p = {"name": (name or "Energy project")[:120], "type": str(typ),
+         "state": st or ctry or "", "lat": lat, "lng": lng, "mw": mw,
+         "company": _first(pr, "Owner", "Parent", "Operator") or "",
+         "status": _first(pr, "Status", "status") or "",
+         "size": ("%s MW" % int(mw)) if mw else "",
+         "desc": "Energy/extraction infrastructure tracked by Global Energy Monitor.",
+         "source": "gem"}
+    p["impact"] = rate_project(p, sensitivity=1)
+    return p
+
+def fetch_gem(dir_path="data/gem"):
+    """Global Energy Monitor trackers (coal/oil/gas/pipelines/LNG/mines/steel/...),
+    all carrying coordinates. Download the tracker(s) from
+    globalenergymonitor.org/download-data (CC-BY 4.0) OR generate per-country
+    GeoJSON with the open-energy-transition/gem_per_country tool, and drop the
+    files (.csv / .xlsx / .geojson) into data/gem/."""
+    import os, glob, json as _json, csv
+    out = []
+    if not os.path.isdir(dir_path):
+        print("  gem: %s not found (skip)" % dir_path); return out
+    for path in glob.glob(os.path.join(dir_path, "*")):
+        low = path.lower()
+        try:
+            if low.endswith((".geojson", ".json")):
+                geo = _json.load(open(path, encoding="utf-8"))
+                for ft in geo.get("features", []):
+                    g = ft.get("geometry") or {}; pr = ft.get("properties") or {}
+                    if g.get("type") != "Point": continue
+                    c = g.get("coordinates") or []
+                    if len(c) >= 2:
+                        p = _gem_norm(pr, _num(c[1]), _num(c[0]))
+                        if p: out.append(p)
+            elif low.endswith(".csv"):
+                for r in csv.DictReader(open(path, newline="", encoding="utf-8")):
+                    lat = _num(_first(r, "Latitude", "latitude", "lat"))
+                    lng = _num(_first(r, "Longitude", "longitude", "lng", "lon"))
+                    p = _gem_norm(r, lat, lng)
+                    if p: out.append(p)
+            elif low.endswith(".xlsx"):
+                import openpyxl
+                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                for ws in wb.worksheets:
+                    rows = ws.iter_rows(values_only=True); hdr = next(rows, None)
+                    if not hdr: continue
+                    idx = {str(h).strip(): i for i, h in enumerate(hdr) if h}
+                    for r in rows:
+                        pr = {k: r[i] for k, i in idx.items() if i < len(r)}
+                        lat = _num(_first(pr, "Latitude", "latitude"))
+                        lng = _num(_first(pr, "Longitude", "longitude"))
+                        p = _gem_norm(pr, lat, lng)
+                        if p: out.append(p)
+        except Exception as e:
+            print("  gem %s failed: %s" % (path, e))
+    print("  gem: %d projects" % len(out))
+    return out
+
+# EPA EIS (cdxapps EIS database), FERC eLibrary API, EJAtlas export: same shape --
+# fetch, keep records with coordinates, normalize, rate. Left as scaffolds so you
+# can wire the endpoints you confirm without touching the rating/merge logic.
+# state centroids for coarse geocoding of federal notices (approximate)
+STATE_CENTROID = {
+ "Alabama":(32.8,-86.8),"Alaska":(64.2,-149.5),"Arizona":(34.2,-111.7),"Arkansas":(34.9,-92.4),
+ "California":(37.2,-119.3),"Colorado":(39.0,-105.5),"Connecticut":(41.6,-72.7),"Delaware":(39.0,-75.5),
+ "District of Columbia":(38.9,-77.0),"Florida":(28.6,-82.4),"Georgia":(32.6,-83.4),"Hawaii":(20.3,-156.4),
+ "Idaho":(44.4,-114.6),"Illinois":(40.0,-89.2),"Indiana":(39.9,-86.3),"Iowa":(42.0,-93.5),"Kansas":(38.5,-98.4),
+ "Kentucky":(37.5,-85.3),"Louisiana":(31.0,-92.0),"Maine":(45.4,-69.2),"Maryland":(39.0,-76.8),
+ "Massachusetts":(42.3,-71.8),"Michigan":(44.3,-85.4),"Minnesota":(46.3,-94.3),"Mississippi":(32.7,-89.7),
+ "Missouri":(38.4,-92.5),"Montana":(47.0,-109.6),"Nebraska":(41.5,-99.8),"Nevada":(39.3,-116.6),
+ "New Hampshire":(43.7,-71.6),"New Jersey":(40.2,-74.7),"New Mexico":(34.4,-106.1),"New York":(42.9,-75.5),
+ "North Carolina":(35.5,-79.4),"North Dakota":(47.5,-100.5),"Ohio":(40.3,-82.8),"Oklahoma":(35.6,-97.5),
+ "Oregon":(43.9,-120.6),"Pennsylvania":(40.9,-77.8),"Rhode Island":(41.7,-71.5),"South Carolina":(33.9,-80.9),
+ "South Dakota":(44.4,-100.2),"Tennessee":(35.9,-86.4),"Texas":(31.5,-99.3),"Utah":(39.3,-111.7),
+ "Vermont":(44.0,-72.7),"Virginia":(37.5,-78.9),"Washington":(47.4,-120.5),"West Virginia":(38.6,-80.6),
+ "Wisconsin":(44.6,-89.9),"Wyoming":(43.0,-107.6),
+}
+import re as _re
+def _detect_state(text):
+    hits = [s for s in STATE_CENTROID if _re.search(r"\b" + _re.escape(s) + r"\b", text)]
+    return hits[0] if len(hits) == 1 else None  # only place if unambiguous
+
+def _infer_type(text):
+    t = text.lower()
+    for k in ("pipeline","lng","mine","mining","drilling","oil","gas","coal","dam",
+              "transmission","highway","timber","logging","port","refinery","reservoir"):
+        if k in t: return k
+    return "federal project"
+
+def fetch_federal_register(days=45, per_page=100):
+    """EIS / NEPA notices from the Federal Register API (free, no key).
+    No coordinates in the data, so each is geocoded to its STATE centroid
+    (approximate) and only when a single state is unambiguously named."""
+    out = []
+    since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    q = {"conditions[term]": "environmental impact statement",
+         "conditions[type][]": "NOTICE",
+         "conditions[publication_date][gte]": since,
+         "per_page": per_page, "order": "newest",
+         "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url"]}
+    # urlencode with repeated keys for the list fields
+    parts = []
+    for k, v in q.items():
+        if isinstance(v, list):
+            for item in v: parts.append((k, item))
+        else:
+            parts.append((k, v))
+    url = "https://www.federalregister.gov/api/v1/documents.json?" + urllib.parse.urlencode(parts)
+    try:
+        data = _get_json(url)
+    except Exception as e:
+        print("  federal register failed: %s" % e); return out
+    jitter = 0.0
+    for d in data.get("results", []):
+        text = " ".join(filter(None, [d.get("title"), d.get("abstract")]))
+        st = _detect_state(text)
+        if not st: continue
+        lat, lng = STATE_CENTROID[st]
+        jitter += 0.11  # fan notices out around the centroid so they don't stack
+        p = {"name": (d.get("title") or "Federal environmental review")[:140],
+             "type": _infer_type(text), "state": st,
+             "lat": round(lat + (jitter % 0.8) - 0.4, 4),
+             "lng": round(lng + ((jitter * 1.7) % 0.8) - 0.4, 4),
+             "size": "", "status": "In federal review (comment window may be open)",
+             "company": "", "url": d.get("html_url"),
+             "desc": "Federal environmental review notice (" + (d.get("publication_date") or "") +
+                     "). Placement is state-level/approximate. Open the notice for the exact "
+                     "location and the comment deadline \u2014 this is the moment to intervene.",
+             "source": "federal_register"}
+        p["impact"] = rate_project(p, sensitivity=1)
+        out.append(p)
+    return out
+
+# EPA EIS / FERC / EJAtlas: coordinate-bearing sources -- wire when you confirm
+# their export endpoints (EJAtlas + Land Matrix carry real lat/lng; GEM ships
+# downloadable trackers with coordinates).
+def fetch_epa_eis(): return []
+def fetch_ferc(): return []
+def fetch_ejatlas(): return []
+
+# ----------------------------------------------------------------------------
+# MERGE + WRITE
+# ----------------------------------------------------------------------------
+def dedup(items):
+    seen, out = set(), []
+    for p in items:
+        key = (round(p["lat"], 3), round(p["lng"], 3), (p.get("name") or "").strip().lower()[:40])
+        if key in seen: continue
+        seen.add(key); out.append(p)
+    return out
+
+def main():
+    items = []
+    for cfg in SOCRATA_CITIES:
+        items += fetch_socrata(cfg)
+    items += fetch_federal_register()   # national regulatory pipeline (state-level geocode)
+    items += fetch_land_matrix()
+    items += fetch_gem()
+    items += fetch_epa_eis() + fetch_ferc() + fetch_ejatlas()
+    items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
+    items = dedup(items)
+    items.sort(key=lambda p: -(p.get("impact") or 0))
+    out = {"_meta": {"generated": datetime.datetime.utcnow().isoformat() + "Z",
+                     "count": len(items),
+                     "sources": "socrata permits, land matrix, global energy monitor, epa eis, ferc, ejatlas",
+                     "rating_scale": "1 minor / 2 local / 3 regional / 4 major / 5 landscape"},
+           "projects": items}
+    with open("projects.json", "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+    print("wrote projects.json with %d projects" % len(items))
+    if not items:
+        print("NOTE: no sources wired yet -- fill SOCRATA_CITIES and uncomment a "
+              "fetcher. The map falls back to its embedded seed set until then.")
+
+if __name__ == "__main__":
+    main()
