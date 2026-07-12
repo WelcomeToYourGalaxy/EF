@@ -1,0 +1,214 @@
+EARTH FIRST! ARCHIVE ANALYSIS - CHUNK MANIFEST
+================================================================================
+
+Original file: earth_first_archive_analysis_20260711_222056.json
+Original size: 0.31 GB
+Total sections: 15868
+Split date: 2026-07-11T22:20:56.865235
+
+CHUNKS:
+--------------------------------------------------------------------------------
+[01] earth_first_archive_analysis_20260711_222056_CHUNK_01_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[02] earth_first_archive_analysis_20260711_222056_CHUNK_02_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[03] earth_first_archive_analysis_20260711_222056_CHUNK_03_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[04] earth_first_archive_analysis_20260711_222056_CHUNK_04_of_51.json
+     Size: 0.79 MB
+     Sections: 314
+
+[05] earth_first_archive_analysis_20260711_222056_CHUNK_05_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[06] earth_first_archive_analysis_20260711_222056_CHUNK_06_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[07] earth_first_archive_analysis_20260711_222056_CHUNK_07_of_51.json
+     Size: 0.82 MB
+     Sections: 314
+
+[08] earth_first_archive_analysis_20260711_222056_CHUNK_08_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[09] earth_first_archive_analysis_20260711_222056_CHUNK_09_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[10] earth_first_archive_analysis_20260711_222056_CHUNK_10_of_51.json
+     Size: 0.82 MB
+     Sections: 314
+
+[11] earth_first_archive_analysis_20260711_222056_CHUNK_11_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[12] earth_first_archive_analysis_20260711_222056_CHUNK_12_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[13] earth_first_archive_analysis_20260711_222056_CHUNK_13_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[14] earth_first_archive_analysis_20260711_222056_CHUNK_14_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[15] earth_first_archive_analysis_20260711_222056_CHUNK_15_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[16] earth_first_archive_analysis_20260711_222056_CHUNK_16_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[17] earth_first_archive_analysis_20260711_222056_CHUNK_17_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[18] earth_first_archive_analysis_20260711_222056_CHUNK_18_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[19] earth_first_archive_analysis_20260711_222056_CHUNK_19_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[20] earth_first_archive_analysis_20260711_222056_CHUNK_20_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[21] earth_first_archive_analysis_20260711_222056_CHUNK_21_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[22] earth_first_archive_analysis_20260711_222056_CHUNK_22_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[23] earth_first_archive_analysis_20260711_222056_CHUNK_23_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[24] earth_first_archive_analysis_20260711_222056_CHUNK_24_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[25] earth_first_archive_analysis_20260711_222056_CHUNK_25_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[26] earth_first_archive_analysis_20260711_222056_CHUNK_26_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[27] earth_first_archive_analysis_20260711_222056_CHUNK_27_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[28] earth_first_archive_analysis_20260711_222056_CHUNK_28_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[29] earth_first_archive_analysis_20260711_222056_CHUNK_29_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[30] earth_first_archive_analysis_20260711_222056_CHUNK_30_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[31] earth_first_archive_analysis_20260711_222056_CHUNK_31_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[32] earth_first_archive_analysis_20260711_222056_CHUNK_32_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[33] earth_first_archive_analysis_20260711_222056_CHUNK_33_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[34] earth_first_archive_analysis_20260711_222056_CHUNK_34_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[35] earth_first_archive_analysis_20260711_222056_CHUNK_35_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[36] earth_first_archive_analysis_20260711_222056_CHUNK_36_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[37] earth_first_archive_analysis_20260711_222056_CHUNK_37_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[38] earth_first_archive_analysis_20260711_222056_CHUNK_38_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[39] earth_first_archive_analysis_20260711_222056_CHUNK_39_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[40] earth_first_archive_analysis_20260711_222056_CHUNK_40_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[41] earth_first_archive_analysis_20260711_222056_CHUNK_41_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[42] earth_first_archive_analysis_20260711_222056_CHUNK_42_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[43] earth_first_archive_analysis_20260711_222056_CHUNK_43_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[44] earth_first_archive_analysis_20260711_222056_CHUNK_44_of_51.json
+     Size: 0.81 MB
+     Sections: 314
+
+[45] earth_first_archive_analysis_20260711_222056_CHUNK_45_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[46] earth_first_archive_analysis_20260711_222056_CHUNK_46_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[47] earth_first_archive_analysis_20260711_222056_CHUNK_47_of_51.json
+     Size: 0.79 MB
+     Sections: 314
+
+[48] earth_first_archive_analysis_20260711_222056_CHUNK_48_of_51.json
+     Size: 0.78 MB
+     Sections: 314
+
+[49] earth_first_archive_analysis_20260711_222056_CHUNK_49_of_51.json
+     Size: 0.80 MB
+     Sections: 314
+
+[50] earth_first_archive_analysis_20260711_222056_CHUNK_50_of_51.json
+     Size: 0.78 MB
+     Sections: 314
+
+[51] earth_first_archive_analysis_20260711_222056_CHUNK_51_of_51.json
+     Size: 0.40 MB
+     Sections: 168
+
