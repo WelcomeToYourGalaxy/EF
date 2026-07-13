@@ -22,5 +22,10 @@ jobs:
           git config user.name  "wire-bot"
           git config user.email "actions@users.noreply.github.com"
           git add wire.json
-          git diff --staged --quiet || git commit -m "chore: refresh wire.json"
-          git push
+          if git diff --staged --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "chore: refresh wire.json"
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin "$(git rev-parse --abbrev-ref HEAD)" && git push && exit 0
+            echo "push race, retry $i"; sleep 6
+          done
+          echo "push failed after retries"; exit 1
