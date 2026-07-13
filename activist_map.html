@@ -1174,20 +1174,22 @@ async function loadWire(force){
   var box=document.getElementById('wireItems'); if(!box) return;
   if(WIRE_LOADED && !force) return; WIRE_LOADED=true;
   box.innerHTML='<div class="wire-load">Loading the wire&hellip;</div>';
-  var items=[];
+  var items=[]; var _diag='';
   try{
     var ctl=('AbortController' in window)?new AbortController():null;
     var to=setTimeout(function(){ if(ctl)ctl.abort(); }, 9000);
     var r=await fetch(WIRE_ARCHIVE_URL+'?_='+Date.now(), ctl?{signal:ctl.signal,cache:'no-store'}:{cache:'no-store'});
     clearTimeout(to);
-    if(r.ok){ var j=await r.json(); if(Array.isArray(j)) items=j; else if(j&&Array.isArray(j.items)) items=j.items; }
-  }catch(e){}
+    if(r.ok){ var j=await r.json(); if(Array.isArray(j)) items=j; else if(j&&Array.isArray(j.items)) items=j.items; else _diag='parsed but not a list'; }
+    else { _diag='HTTP '+r.status; }
+  }catch(e){ _diag='fetch error: '+((e&&e.message)||e); }
+  try{ console.log('[wire] fetched', WIRE_ARCHIVE_URL, '->', items.length, 'items', _diag||''); }catch(_e){}
   if(items.length){ _sharedArchive=items; try{ _wireArchive(items); }catch(e){} }
   else { try{ var _l=_wireGetArchive(); if(_l&&_l.length) items=_l; }catch(e){} }
   var src=document.getElementById('wireSrc');
   if(!items.length){
     if(src) src.textContent='';
-    box.innerHTML='<div class="wire-load">The wire is quiet right now \u2014 it refreshes automatically every few hours. In the meantime, use the sources on the map directly.</div>';
+    box.innerHTML='<div class="wire-load">The wire is quiet right now'+(_diag?(' ['+_diag+']'):'')+' \u2014 it refreshes automatically. In the meantime, use the sources on the map directly.</div>';
     return;
   }
   items.sort(function(a,b){ return (b.sig-a.sig) || (+new Date(b.date) - +new Date(a.date)); });
