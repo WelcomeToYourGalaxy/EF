@@ -1168,7 +1168,7 @@ function _wireRender(){
 async function _loadSharedArchive(){ if(_sharedArchive)return _sharedArchive;
   try{ var r=await fetch(WIRE_ARCHIVE_URL,{cache:'no-store'}); if(r.ok){ var j=await r.json(); if(Array.isArray(j)&&j.length){ _sharedArchive=j; return j; } } }catch(e){}
   _sharedArchive=_wireGetArchive(); return _sharedArchive; }
-function setWireMode(m){ wireMode=m; var t=document.querySelectorAll('.wire-tab'); t.forEach(function(el){ el.classList.toggle('on', el.getAttribute('data-wm')===m); }); if(m==='timeline'){ _loadSharedArchive().then(_wireRender); } else { _wireRender(); } }
+function setWireMode(m){ wireMode=m; var t=document.querySelectorAll('.wire-tab'); t.forEach(function(el){ el.classList.toggle('on', el.getAttribute('data-wm')===m); }); if(m==='timeline'){ _loadSharedArchive().then(_wireRender); } else { try{ loadWire(true); }catch(e){ try{_wireRender();}catch(_e){} } } }
 
 async function loadWire(force){
   var box=document.getElementById('wireItems'); if(!box) return;
@@ -1389,7 +1389,8 @@ function __legacyDeactivate(){}
  hdl.addEventListener("mousedown",down); hdl.addEventListener("touchstart",down,{passive:false}); hdl.style.cursor="move";
 })();
 try{var _wp=document.getElementById("wirePanel"); if(_wp && window.L){ L.DomEvent.disableScrollPropagation(_wp); L.DomEvent.disableClickPropagation(_wp);} }catch(e){}
-try{ setWireMode("live"); loadWire(); }catch(e){ console.warn("wire init",e); }
+try{ setWireMode("live"); }catch(e){ console.warn("setWireMode",e); }
+try{ loadWire(); }catch(e){ console.warn("loadWire",e); }
 
 
 /* robust wheel-scroll for side panels (scroll without clicking; never zooms the map) */
