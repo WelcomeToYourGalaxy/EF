@@ -23,7 +23,7 @@ Each source fetcher returns a list of normalized dicts:
 rate_project() then assigns impact 1-5. Records without lat/lng are skipped
 (the map needs a point). Output is written to projects.json.
 """
-import json, sys, os, datetime, urllib.request, urllib.parse
+import json, sys, os, re, time, datetime, urllib.request, urllib.parse
 
 UA = "activist-projects-harvester (contact: wheelock.chris@gmail.com)"
 TIMEOUT = 30
@@ -499,6 +499,35 @@ def fetch_permitstack(min_value=2000000):
 # BLM + U.S. Forest Service NEPA actions on PUBLIC LAND, via the Federal
 # Register API filtered by agency (free, no key). State-centroid geocode.
 # ---------------------------------------------------------------------------
+_GEO_CACHE = {}
+_FOREST_RE = re.compile(
+    r"([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){0,4}\s+"
+    r"National\s+(?:Forests?|Grasslands?|Recreation Area|Monument|Preserve))")
+
+def _geocode_place(q):
+    """Best-effort geocode of a named public land (e.g. a national forest) via
+    OpenStreetMap Nominatim. Free; we honor the 1 req/sec usage policy and fall
+    back to state placement if it is unavailable. Returns (lat, lng) or None."""
+    if not q:
+        return None
+    if q in _GEO_CACHE:
+        return _GEO_CACHE[q]
+    res = None
+    try:
+        url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+            {"q": q, "format": "json", "limit": 1, "countrycodes": "us"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "activist-project-map/1.0 (wheelock.chris@gmail.com)"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            arr = json.loads(r.read().decode("utf-8", "replace"))
+        if arr:
+            res = (float(arr[0]["lat"]), float(arr[0]["lon"]))
+        time.sleep(1.1)
+    except Exception:
+        res = None
+    _GEO_CACHE[q] = res
+    return res
+
 def fetch_public_land_nepa(days=60, per_page=100):
     out = []
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
@@ -523,18 +552,30 @@ def fetch_public_land_nepa(days=60, per_page=100):
         for d in data.get("results", []):
             text = " ".join(filter(None, [d.get("title"), d.get("abstract")]))
             st = _detect_state(text)
-            if not st: continue
-            lat, lng = STATE_CENTROID[st]
-            jitter += 0.13
+            # try to place it on the named national forest/grassland (local),
+            # else fall back to the state centroid (approximate).
+            fm = _FOREST_RE.search(text)
+            forest = fm.group(1).strip() if fm else None
+            coords = _geocode_place(forest) if forest else None
+            if coords:
+                lat, lng = coords
+                place_note = "Placed on " + forest + "."
+            elif st:
+                lat, lng = STATE_CENTROID[st]
+                jitter += 0.13
+                lat = round(lat + (jitter % 0.8) - 0.4, 4)
+                lng = round(lng + ((jitter * 1.7) % 0.8) - 0.4, 4)
+                place_note = "State-level placement; open the notice for the exact site."
+            else:
+                continue
             p = {"name": (d.get("title") or (label + " public-land action"))[:140],
-                 "type": _infer_type(text), "state": st,
-                 "lat": round(lat + (jitter % 0.8) - 0.4, 4),
-                 "lng": round(lng + ((jitter * 1.7) % 0.8) - 0.4, 4),
+                 "type": _infer_type(text), "state": st or "",
+                 "lat": round(lat, 5), "lng": round(lng, 5),
                  "size": "", "status": "Public land \u2014 " + label + " NEPA review",
                  "company": "", "url": d.get("html_url"),
                  "desc": (label + " action on public land (" +
-                          (d.get("publication_date") or "") + "). State-level placement; "
-                          "open the notice for the exact site and comment deadline."),
+                          (d.get("publication_date") or "") + "). " + place_note +
+                          " Open the notice for the comment deadline."),
                  "source": "public_land_nepa"}
             p["impact"] = rate_project(p, sensitivity=1)
             out.append(p)
@@ -550,10 +591,14 @@ def fetch_public_land_nepa(days=60, per_page=100):
 def fetch_blm_arcgis():
     base = ("https://gis.blm.gov/arcgis/rest/services/ePlanning/"
             "BLM_Natl_Epl_Comment/FeatureServer/0/query")
-    q = urllib.parse.urlencode({"where": "1=1", "outFields": "*", "f": "geojson",
-                                "outSR": "4326", "resultRecordCount": "2000"})
+    q = urllib.parse.urlencode({"where": "1=1", "outFields": "*", "returnGeometry": "true",
+                                "outSR": "4326", "f": "json", "resultRecordCount": "2000"})
     try:
-        gj = _get_json(base + "?" + q)
+        req = urllib.request.Request(base + "?" + q, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
+            "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            gj = json.loads(r.read().decode("utf-8", "replace"))
     except Exception as e:
         print("  blm arcgis failed: %s" % e); return []
     out = []
@@ -562,11 +607,11 @@ def fetch_blm_arcgis():
     for f in gj.get("features", []):
         try:
             geom = f.get("geometry") or {}
-            c = geom.get("coordinates") or []
-            if geom.get("type") != "Point" or len(c) < 2:
+            lng = geom.get("x"); lat = geom.get("y")
+            if lat is None or lng is None:
                 continue
-            lng, lat = float(c[0]), float(c[1])
-            props = f.get("properties") or {}
+            lng, lat = float(lng), float(lat)
+            props = f.get("attributes") or {}
             up = {k.upper(): v for k, v in props.items()}
             nm = next((up[k] for k in NAME_KEYS if up.get(k)), None)
             if not nm:
