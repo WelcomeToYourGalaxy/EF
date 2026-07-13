@@ -1,7 +1,7 @@
 {
  "_meta": {
-  "generated": "2026-07-13T10:54:48.171282Z",
-  "count": 478,
+  "generated": "2026-07-13T22:36:19.604022Z",
+  "count": 481,
   "sources": "socrata permits, land matrix, global energy monitor, epa eis, ferc, ejatlas",
   "rating_scale": "1 minor / 2 local / 3 regional / 4 major / 5 landscape"
  },
@@ -172,6 +172,20 @@
    "url": "https://www.federalregister.gov/documents/2026/05/29/2026-10798/notice-of-intent-to-prepare-an-environmental-impact-statement-for-the-proposed-delamar-mine",
    "desc": "Federal environmental review notice (2026-05-29). Placement is state-level/approximate. Open the notice for the exact location and the comment deadline — this is the moment to intervene.",
    "source": "federal_register",
+   "impact": 5
+  },
+  {
+   "name": "Custer Gallatin National Forest; Montana; Stillwater Mine Complex Amendment 14",
+   "type": "mine",
+   "state": "Montana",
+   "lat": 46.86,
+   "lng": -109.558,
+   "size": "",
+   "status": "Public land — USFS NEPA review",
+   "company": "",
+   "url": "https://www.federalregister.gov/documents/2026/06/15/2026-11992/custer-gallatin-national-forest-montana-stillwater-mine-complex-amendment-14",
+   "desc": "USFS action on public land (2026-06-15). State-level placement; open the notice for the exact site and comment deadline.",
+   "source": "public_land_nepa",
    "impact": 5
   },
   {
@@ -1082,6 +1096,34 @@
    "url": "https://www.federalregister.gov/documents/2026/06/02/2026-10936/draft-environmental-impact-statement-for-the-berkeley-space-center-at-nasa-research-park",
    "desc": "Federal environmental review notice (2026-06-02). Placement is state-level/approximate. Open the notice for the exact location and the comment deadline — this is the moment to intervene.",
    "source": "federal_register",
+   "impact": 2
+  },
+  {
+   "name": "Idaho Panhandle Resource Advisory Committee",
+   "type": "federal project",
+   "state": "Idaho",
+   "lat": 44.13,
+   "lng": -114.779,
+   "size": "",
+   "status": "Public land — USFS NEPA review",
+   "company": "",
+   "url": "https://www.federalregister.gov/documents/2026/07/09/2026-13836/idaho-panhandle-resource-advisory-committee",
+   "desc": "USFS action on public land (2026-07-09). State-level placement; open the notice for the exact site and comment deadline.",
+   "source": "public_land_nepa",
+   "impact": 2
+  },
+  {
+   "name": "Caribou-Targhee National Forest; Wyoming; Amendment to the 1997 Land Management Plan for the Targhee National Forest",
+   "type": "federal project",
+   "state": "Wyoming",
+   "lat": 42.99,
+   "lng": -107.337,
+   "size": "",
+   "status": "Public land — USFS NEPA review",
+   "company": "",
+   "url": "https://www.federalregister.gov/documents/2026/05/29/2026-10676/caribou-targhee-national-forest-wyoming-amendment-to-the-1997-land-management-plan-for-the-targhee",
+   "desc": "USFS action on public land (2026-05-29). State-level placement; open the notice for the exact site and comment deadline.",
+   "source": "public_land_nepa",
    "impact": 2
   },
   {
