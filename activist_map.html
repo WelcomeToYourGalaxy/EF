@@ -1402,8 +1402,10 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
 .pjm-pop .t{display:inline-block;background:rgba(255,107,53,0.18);border:1px solid #ff6b35;border-radius:16px;padding:1px 7px;font-size:10px;color:#ffc9ad;margin-right:5px;}
 .pjm-pop .s{color:#ffcf5c;letter-spacing:1px;}
 .pjm-pop .d{font-size:12px;line-height:1.42;margin-top:5px;color:#cfd8e3;}
+.pjm-marker{ filter: drop-shadow(0 0 2.5px rgba(0,0,0,0.9)); }
+.leaflet-marker-pane .pjm-marker,.leaflet-overlay-pane .pjm-marker{ cursor:pointer; }
 </style>
-<button id="projToggle" title="Live projects to resist \u2014 sized by impact">\U0001f525 Live Projects</button>
+<button id="projToggle" title="Live projects to resist — sized by impact">🔥 Live Projects</button>
 <script>
 (function(){
   var PJ_SEED={"projects":[
@@ -1425,7 +1427,9 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     pjLayer=L.layerGroup();
     ((pjData&&pjData.projects)||[]).forEach(function(p){
       var c=PC[p.impact]||"#3fa66a", r=PR[p.impact]||5;
-      var m=L.circleMarker([p.lat,p.lng],{radius:r,color:c,weight:1.4,fillColor:c,fillOpacity:0.55});
+      var m=L.circleMarker([p.lat,p.lng],{radius:r+1,color:'#ffffff',weight:2,fillColor:c,fillOpacity:0.95,className:'pjm-marker'});
+      m.on('click',function(e){ if(window.L&&L.DomEvent){L.DomEvent.stopPropagation(e);} });
+      m.on('add',function(){ try{m.bringToFront();}catch(_e){} });
       m.bindPopup('<div class="pjm-pop"><b>'+p.name+'</b><br><span class="t">'+(p.type||'project')+'</span>'+(p.state||'')+(p.company?' \u00b7 '+p.company:'')+'<br><span class="s" title="impact '+(p.impact||1)+'/5">'+stars(p.impact||1)+'</span><div class="d">'+(p.desc||'')+'</div>'+(p.size?'<div class="d">Scale: '+p.size+(p.status?' \u00b7 '+p.status:'')+'</div>':'')+(p.url?'<div class="d"><a href="'+p.url+'" target="_blank" style="color:#ff9d6b">Open notice \u2192</a></div>':'')+'</div>',{maxWidth:320});
       pjLayer.addLayer(m);
     });
