@@ -712,7 +712,7 @@ function gbApplyBubble(iso,layer){ if(!layer) return;
   });
   if(changed) layer.setStyle(f=>gbUnitStyle(iso,gbCurLvl,f));
 }
-function showInfoPanel(html){ const b=document.getElementById('infoBody'); if(b)b.innerHTML=html; const p=document.getElementById('infoPanel'); if(p){ try{ if(window.innerWidth>640){ const ix=document.getElementById('indexPanel'); if(ix){ const r=ix.getBoundingClientRect(); p.style.left=(Math.round(r.right)+12)+'px'; } const wp=document.getElementById('wirePanel'); if(wp){ const wr=wp.getBoundingClientRect(); p.style.top=(Math.max(70,Math.round(wr.bottom)+12))+'px'; } } }catch(e){} p.classList.add('open'); } }
+function showInfoPanel(html){ const b=document.getElementById('infoBody'); if(b)b.innerHTML=html; const p=document.getElementById('infoPanel'); if(p){ try{ if(window.innerWidth>640){ const ix=document.getElementById('indexPanel'); if(ix){ const r=ix.getBoundingClientRect(); p.style.left=(Math.round(r.right)+12)+'px'; } const wp=document.getElementById('wirePanel'); if(wp){ const wr=wp.getBoundingClientRect(); var _tv=Math.max(70,Math.round(wr.bottom)+12); p.style.top=_tv+'px'; p.style.maxHeight=(window.innerHeight-_tv-16)+'px'; p.style.overflowY='auto'; } } }catch(e){} p.classList.add('open'); } }
 function hideInfoPanel(){ const p=document.getElementById('infoPanel'); if(p)p.classList.remove('open'); }
 function gbFitPad(sz){ return (window.innerWidth<=640) ? {paddingTopLeft:[40,95],paddingBottomRight:[40,Math.round(sz.y*0.5)+16]} : {paddingTopLeft:[Math.min(660,Math.round(sz.x*0.55)),72],paddingBottomRight:[40,50]}; }
 function gbFitWithPanel(bounds){ if(!bounds)return; try{ gbFitTime=Date.now(); map.fitBounds(bounds,gbFitPad(map.getSize())); }catch(e){} }
@@ -1180,7 +1180,7 @@ async function loadWire(force){
     var to=setTimeout(function(){ if(ctl)ctl.abort(); }, 9000);
     var r=await fetch(WIRE_ARCHIVE_URL+'?_='+Date.now(), ctl?{signal:ctl.signal,cache:'no-store'}:{cache:'no-store'});
     clearTimeout(to);
-    if(r.ok){ var j=await r.json(); if(Array.isArray(j)) items=j; }
+    if(r.ok){ var j=await r.json(); if(Array.isArray(j)) items=j; else if(j&&Array.isArray(j.items)) items=j.items; }
   }catch(e){}
   if(items.length){ _sharedArchive=items; try{ _wireArchive(items); }catch(e){} }
   else { try{ var _l=_wireGetArchive(); if(_l&&_l.length) items=_l; }catch(e){} }
@@ -1420,6 +1420,8 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
    {"name":"Pebble Mine","type":"Gold/copper mine","state":"AK","lat":59.90,"lng":-155.30,"impact":5,"company":"Northern Dynasty","size":"Headwaters pit","status":"EPA-vetoed","desc":"Proposed mine in Bristol Bay salmon headwaters; developers seek to overturn the CWA veto."}
   ]};
   var PC={5:"#c0392b",4:"#e67e22",3:"#e6b800",2:"#7cb342",1:"#3fa66a"}, PR={5:15,4:12,3:9,2:7,1:5};
+  try{ if(typeof map!=='undefined' && map.createPane && !map.getPane('projPane')){ map.createPane('projPane'); map.getPane('projPane').style.zIndex=620; } }catch(_e){}
+  var _projRenderer=(typeof map!=='undefined' && L && L.svg)?L.svg({pane:'projPane'}):null;
   function stars(n){return Array(n+1).join("\u2605")+Array(6-n).join("\u2606");}
   var pjLayer=null, pjData=null, pjOn=false;
   function pjRender(){
@@ -1427,8 +1429,9 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     pjLayer=L.layerGroup();
     ((pjData&&pjData.projects)||[]).forEach(function(p){
       var c=PC[p.impact]||"#3fa66a", r=PR[p.impact]||5;
-      var m=L.circleMarker([p.lat,p.lng],{radius:r+1,color:'#ffffff',weight:2,fillColor:c,fillOpacity:0.95,className:'pjm-marker'});
-      m.on('click',function(e){ if(window.L&&L.DomEvent){L.DomEvent.stopPropagation(e);} });
+      var _mo={radius:r+1,color:'#ffffff',weight:2,fillColor:c,fillOpacity:0.95,className:'pjm-marker',pane:'projPane'}; if(_projRenderer)_mo.renderer=_projRenderer;
+      var m=L.circleMarker([p.lat,p.lng],_mo);
+      m.on('click mousedown dblclick',function(e){ try{ var oe=e&&e.originalEvent; if(oe&&L.DomEvent){L.DomEvent.stopPropagation(oe); L.DomEvent.preventDefault(oe);} if(L.DomEvent)L.DomEvent.stopPropagation(e); }catch(_e){} });
       m.on('add',function(){ try{m.bringToFront();}catch(_e){} });
       m.bindPopup('<div class="pjm-pop"><b>'+p.name+'</b><br><span class="t">'+(p.type||'project')+'</span>'+(p.state||'')+(p.company?' \u00b7 '+p.company:'')+'<br><span class="s" title="impact '+(p.impact||1)+'/5">'+stars(p.impact||1)+'</span><div class="d">'+(p.desc||'')+'</div>'+(p.size?'<div class="d">Scale: '+p.size+(p.status?' \u00b7 '+p.status:'')+'</div>':'')+(p.url?'<div class="d"><a href="'+p.url+'" target="_blank" style="color:#ff9d6b">Open notice \u2192</a></div>':'')+'</div>',{maxWidth:320});
       pjLayer.addLayer(m);
