@@ -23,7 +23,7 @@ Each source fetcher returns a list of normalized dicts:
 rate_project() then assigns impact 1-5. Records without lat/lng are skipped
 (the map needs a point). Output is written to projects.json.
 """
-import json, sys, datetime, urllib.request, urllib.parse
+import json, sys, os, datetime, urllib.request, urllib.parse
 
 UA = "activist-projects-harvester (contact: wheelock.chris@gmail.com)"
 TIMEOUT = 30
@@ -368,7 +368,45 @@ def fetch_federal_register(days=45, per_page=100):
 # downloadable trackers with coordinates).
 def fetch_epa_eis(): return []
 def fetch_ferc(): return []
-def fetch_ejatlas(): return []
+def fetch_ejatlas(path="data/ejatlas.geojson"):
+    """Environmental Justice Atlas conflicts (global). EJAtlas has NO public API,
+    and its data is CC BY-NC-SA 3.0 -- free for NON-COMMERCIAL use WITH attribution
+    to ejatlas.org. Obtain a GeoJSON export (featured-map export or a data request
+    to the EJAtlas team) and drop it at data/ejatlas.geojson. Each point is
+    published with a mandatory 'Source: EJAtlas (CC BY-NC-SA)' credit in its desc."""
+    out = []
+    if not os.path.exists(path):
+        print("  ejatlas: %s not found (skip) -- see docstring to add it" % path); return out
+    try:
+        gj = json.load(open(path, encoding="utf-8"))
+    except Exception as e:
+        print("  ejatlas: bad file: %s" % e); return out
+    feats = gj.get("features", gj) if isinstance(gj, dict) else gj
+    for f in (feats or []):
+        try:
+            geom = f.get("geometry") or {}
+            props = f.get("properties") or {}
+            coords = geom.get("coordinates") or []
+            if geom.get("type") == "Point" and len(coords) >= 2:
+                lng, lat = float(coords[0]), float(coords[1])
+            else:
+                continue
+            nm = (props.get("name") or props.get("Name") or props.get("title") or "EJ conflict")
+            out.append({
+                "name": str(nm)[:140],
+                "type": props.get("category") or props.get("Category") or "Environmental conflict",
+                "state": props.get("country") or props.get("Country") or "",
+                "lat": round(lat, 5), "lng": round(lng, 5),
+                "size": "", "status": props.get("status") or props.get("intensity") or "",
+                "company": props.get("company") or props.get("companies") or "",
+                "url": props.get("url") or props.get("link") or "https://ejatlas.org/",
+                "desc": (str(props.get("description") or props.get("summary") or "")[:240] +
+                         " \u2014 Source: EJAtlas (CC BY-NC-SA)."),
+                "source": "ejatlas",
+            })
+        except Exception:
+            continue
+    return out
 
 # ----------------------------------------------------------------------------
 # MERGE + WRITE
@@ -381,17 +419,197 @@ def dedup(items):
         seen.add(key); out.append(p)
     return out
 
+def _run(name, fn):
+    """Run one source in isolation so a single failure can't kill the harvest."""
+    try:
+        got = fn() or []
+        print("  %-18s %d" % (name + ":", len(got)))
+        return got
+    except Exception as e:
+        print("  %-18s FAILED: %s" % (name + ":", e))
+        return []
+
+
+# ---------------------------------------------------------------------------
+# PermitStack -- national building/development permits (free tier, needs key).
+# Docs: api.permit-stack.com/docs ; auth via X-API-Key ; permits carry lat/lng.
+# Set PERMITSTACK_API_KEY as a GitHub Actions secret. Confirmed fields:
+# address, permit_number, category, contractor_name, estimated_value,
+# date_issued, latitude, longitude, city, state.
+# ---------------------------------------------------------------------------
+PERMITSTACK_CITIES = [
+    "New York","Los Angeles","Chicago","Houston","Phoenix","Philadelphia",
+    "San Antonio","San Diego","Dallas","Austin","San Jose","Jacksonville",
+    "Fort Worth","Columbus","Charlotte","San Francisco","Indianapolis","Seattle",
+    "Denver","Nashville","Oklahoma City","Portland","Las Vegas","Memphis",
+    "Louisville","Baltimore","Milwaukee","Albuquerque","Tucson","Sacramento",
+    "Kansas City","Atlanta","Miami","Raleigh","Minneapolis","New Orleans",
+    "Tampa","Richmond","Boise","Salt Lake City",
+]
+
+def _ps_get(o, k):
+    return (o.get(k) if isinstance(o, dict) else getattr(o, k, None))
+
+def fetch_permitstack(min_value=2000000):
+    key = os.environ.get("PERMITSTACK_API_KEY")
+    if not key:
+        print("  permitstack: no PERMITSTACK_API_KEY set (skip)"); return []
+    try:
+        from permitstack import Permitstack
+    except Exception:
+        print("  permitstack: SDK missing (pip install permitstack) (skip)"); return []
+    try:
+        client = Permitstack(api_key=key)
+    except Exception as e:
+        print("  permitstack: init failed: %s" % e); return []
+    out = []
+    for city in PERMITSTACK_CITIES:
+        try:
+            res = client.permits.search_permits(city=city, category="new_construction",
+                                                 min_value=min_value)
+            rows = _ps_get(res, "results") or (res if isinstance(res, list) else []) or []
+            for r in rows:
+                lat = _ps_get(r, "latitude"); lng = _ps_get(r, "longitude")
+                if lat is None or lng is None:
+                    continue
+                val = _ps_get(r, "estimated_value") or 0
+                addr = _ps_get(r, "address") or ""
+                nm = (addr or _ps_get(r, "category") or "New construction")
+                try: size = "$%s" % format(int(val), ",") if val else ""
+                except Exception: size = ""
+                out.append({
+                    "name": str(nm)[:140],
+                    "type": "New construction",
+                    "state": _ps_get(r, "state") or "",
+                    "lat": round(float(lat), 5), "lng": round(float(lng), 5),
+                    "size": size,
+                    "status": "Permit on file",
+                    "company": _ps_get(r, "contractor_name") or "",
+                    "url": "",
+                    "desc": ("Building permit" + (" \u00b7 " + addr if addr else "") +
+                             (" \u00b7 issued " + str(_ps_get(r, "date_issued"))
+                              if _ps_get(r, "date_issued") else "") + "."),
+                    "source": "permitstack",
+                })
+        except Exception as e:
+            print("  permitstack %s: %s" % (city, e))
+    return out
+
+# ---------------------------------------------------------------------------
+# BLM + U.S. Forest Service NEPA actions on PUBLIC LAND, via the Federal
+# Register API filtered by agency (free, no key). State-centroid geocode.
+# ---------------------------------------------------------------------------
+def fetch_public_land_nepa(days=60, per_page=100):
+    out = []
+    since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    for slug, label in [("forest-service", "USFS")]:
+        q = {"conditions[agencies][]": slug,
+             "conditions[type][]": "NOTICE",
+             "conditions[publication_date][gte]": since,
+             "per_page": per_page, "order": "newest",
+             "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url"]}
+        parts = []
+        for k, v in q.items():
+            if isinstance(v, list):
+                for it in v: parts.append((k, it))
+            else: parts.append((k, v))
+        url = ("https://www.federalregister.gov/api/v1/documents.json?" +
+               urllib.parse.urlencode(parts))
+        try:
+            data = _get_json(url)
+        except Exception as e:
+            print("  public-land %s failed: %s" % (label, e)); continue
+        jitter = 0.0
+        for d in data.get("results", []):
+            text = " ".join(filter(None, [d.get("title"), d.get("abstract")]))
+            st = _detect_state(text)
+            if not st: continue
+            lat, lng = STATE_CENTROID[st]
+            jitter += 0.13
+            p = {"name": (d.get("title") or (label + " public-land action"))[:140],
+                 "type": _infer_type(text), "state": st,
+                 "lat": round(lat + (jitter % 0.8) - 0.4, 4),
+                 "lng": round(lng + ((jitter * 1.7) % 0.8) - 0.4, 4),
+                 "size": "", "status": "Public land \u2014 " + label + " NEPA review",
+                 "company": "", "url": d.get("html_url"),
+                 "desc": (label + " action on public land (" +
+                          (d.get("publication_date") or "") + "). State-level placement; "
+                          "open the notice for the exact site and comment deadline."),
+                 "source": "public_land_nepa"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+    return out
+
+
+
+# ---------------------------------------------------------------------------
+# BLM -- PRECISE project points from BLM's public ArcGIS FeatureServer that
+# powers the NEPA Register map (open-comment projects). Real lat/lng, no key.
+# gis.blm.gov/arcgis/rest/services/ePlanning/BLM_Natl_Epl_Comment (layer 0).
+# ---------------------------------------------------------------------------
+def fetch_blm_arcgis():
+    base = ("https://gis.blm.gov/arcgis/rest/services/ePlanning/"
+            "BLM_Natl_Epl_Comment/FeatureServer/0/query")
+    q = urllib.parse.urlencode({"where": "1=1", "outFields": "*", "f": "geojson",
+                                "outSR": "4326", "resultRecordCount": "2000"})
+    try:
+        gj = _get_json(base + "?" + q)
+    except Exception as e:
+        print("  blm arcgis failed: %s" % e); return []
+    out = []
+    NAME_KEYS = ("PROJECT_NAME", "PROJECT_NA", "PROJECTNAME", "NEPA_PROJECT",
+                 "PROJECT", "NAME", "TITLE", "DOC_NAME", "PLAN_NAME")
+    for f in gj.get("features", []):
+        try:
+            geom = f.get("geometry") or {}
+            c = geom.get("coordinates") or []
+            if geom.get("type") != "Point" or len(c) < 2:
+                continue
+            lng, lat = float(c[0]), float(c[1])
+            props = f.get("properties") or {}
+            up = {k.upper(): v for k, v in props.items()}
+            nm = next((up[k] for k in NAME_KEYS if up.get(k)), None)
+            if not nm:
+                strs = [v for v in props.values() if isinstance(v, str) and v.strip()]
+                nm = max(strs, key=len) if strs else "BLM NEPA project"
+            nepa = next((str(v) for k, v in up.items() if "NEPA" in k and v), None)
+            p = {"name": str(nm)[:140], "type": "BLM public-land action", "state": "",
+                 "lat": round(lat, 5), "lng": round(lng, 5), "size": "",
+                 "status": "Open for comment (BLM NEPA)", "company": "",
+                 "url": "https://eplanning.blm.gov/eplanning-ui/home",
+                 "desc": ("BLM NEPA project on public land" +
+                          ((" \u00b7 " + nepa) if nepa else "") +
+                          " \u2014 comment window may be open. Precise location from "
+                          "BLM ePlanning."),
+                 "source": "blm_arcgis"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    return out
+
+
 def main():
     items = []
-    for cfg in SOCRATA_CITIES:
-        items += fetch_socrata(cfg)
-    items += fetch_federal_register()   # national regulatory pipeline (state-level geocode)
-    items += fetch_land_matrix()
-    items += fetch_gem()
-    items += fetch_epa_eis() + fetch_ferc() + fetch_ejatlas()
+    items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
+    items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES for p in fetch_socrata(cfg)])
+    items += _run("federal_register", fetch_federal_register)   # US EIS notices
+    items += _run("blm_arcgis", fetch_blm_arcgis)               # BLM, PRECISE coordinates
+    items += _run("forest_service_nepa", fetch_public_land_nepa)# USFS via Federal Register
+    items += _run("ejatlas", fetch_ejatlas)                     # global EJ conflicts (local export)
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
     items.sort(key=lambda p: -(p.get("impact") or 0))
+    # anti-wipe: never replace a healthy projects.json with a thin/empty harvest
+    if len(items) < 4 and os.path.exists("projects.json"):
+        try:
+            ex = json.load(open("projects.json", encoding="utf-8"))
+            exn = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
+            if len(exn) > len(items):
+                print("harvest thin (%d) < existing (%d) -- keeping existing projects.json" % (len(items), len(exn)))
+                return
+        except Exception:
+            pass
     out = {"_meta": {"generated": datetime.datetime.utcnow().isoformat() + "Z",
                      "count": len(items),
                      "sources": "socrata permits, land matrix, global energy monitor, epa eis, ferc, ejatlas",
