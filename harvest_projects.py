@@ -592,7 +592,7 @@ def fetch_blm_arcgis():
     base = ("https://gis.blm.gov/arcgis/rest/services/ePlanning/"
             "BLM_Natl_Epl_Comment/FeatureServer/0/query")
     q = urllib.parse.urlencode({"where": "1=1", "outFields": "*", "returnGeometry": "true",
-                                "outSR": "4326", "f": "json", "resultRecordCount": "2000"})
+                                "f": "json", "resultRecordCount": "2000"})
     try:
         req = urllib.request.Request(base + "?" + q, headers={
             "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
@@ -601,6 +601,10 @@ def fetch_blm_arcgis():
             gj = json.loads(r.read().decode("utf-8", "replace"))
     except Exception as e:
         print("  blm arcgis failed: %s" % e); return []
+    if isinstance(gj, dict) and gj.get("error"):
+        print("  blm arcgis API error: %s" % str(gj.get("error"))[:200]); return []
+    _raw = gj.get("features", []) if isinstance(gj, dict) else []
+    print("  blm arcgis: %d raw features returned" % len(_raw))
     out = []
     NAME_KEYS = ("PROJECT_NAME", "PROJECT_NA", "PROJECTNAME", "NEPA_PROJECT",
                  "PROJECT", "NAME", "TITLE", "DOC_NAME", "PLAN_NAME")
