@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Activist Research & Investigation Resources Map</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,700&family=Playfair+Display:wght@700;800&display=swap');
@@ -1314,15 +1312,7 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
   }
   function pjRender(){
     if(pjLayer){ try{ map.removeLayer(pjLayer); }catch(e){} }
-    pjLayer = (L.markerClusterGroup ? L.markerClusterGroup({
-      maxClusterRadius:46, spiderfyOnMaxZoom:true, showCoverageOnHover:false,
-      chunkedLoading:true, removeOutsideVisibleBounds:true, disableClusteringAtZoom:13,
-      iconCreateFunction:function(cl){
-        var n=cl.getChildCount(), sz=n<10?34:n<50?40:n<250?48:56;
-        return L.divIcon({html:'<div class="pjm-cl-inner"><span>'+n+'</span></div>',
-          className:"pjm-cl", iconSize:[sz,sz]});
-      }
-    }) : L.layerGroup());
+    pjLayer = L.layerGroup();
     ((pjData&&pjData.projects)||[]).forEach(function(p){
       if(p.lat==null||p.lng==null) return;
       var m=L.marker([p.lat,p.lng],{icon:pjIcon(p.impact||1)});

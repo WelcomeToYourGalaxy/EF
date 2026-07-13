@@ -319,6 +319,31 @@ def _infer_type(text):
         if k in t: return k
     return "federal project"
 
+_PROJECT_ALLOW = (
+    "pipeline","mine","mining","drill","borehole","well pad","lease sale","oil and gas",
+    "coal","timber","logging","thinning","vegetation management","fuel reduction","hazardous fuels",
+    "dam","reservoir","highway","interstate","roadway","bridge","transmission","substation",
+    "power plant","powerplant","lng","terminal","refinery","petrochemical","quarry","aggregate",
+    "geothermal","wind farm","wind energy","solar","mineral","uranium","lithium","copper","gold",
+    "nickel","cobalt","phosphate","potash","extraction","grazing","allotment","right-of-way",
+    "right of way","rights-of-way","land exchange","land disposal","port","harbor","dredg",
+    "development","construction","expansion","mill","smelter","export terminal","rail",
+    "resource management plan","travel management","forest plan","restoration project","landfill",
+    "incinerator","data center","warehouse","subdivision","water project","canal","hydroelectric",
+    "hydropower","reclamation","withdrawal","utility corridor","reroute","widening","interchange",
+)
+_RESEARCH_DENY = (
+    "marine mammal","incidental take","scientific research","research permit","cetacean","pinniped",
+    "stock assessment","fishery observer","enhancement permit","captive","aquarium","recovery plan",
+    "status review","proposed for listing","import of","take of marine","permit to conduct research",
+    "endangered species permit","scientific purposes","photography permit",
+)
+def _is_project(text):
+    t = (text or "").lower()
+    if any(d in t for d in _RESEARCH_DENY):
+        return False
+    return any(a in t for a in _PROJECT_ALLOW)
+
 def fetch_federal_register(days=45, per_page=100):
     """EIS / NEPA notices from the Federal Register API (free, no key).
     No coordinates in the data, so each is geocoded to its STATE centroid
@@ -345,6 +370,7 @@ def fetch_federal_register(days=45, per_page=100):
     jitter = 0.0
     for d in data.get("results", []):
         text = " ".join(filter(None, [d.get("title"), d.get("abstract")]))
+        if not _is_project(text): continue
         st = _detect_state(text)
         if not st: continue
         lat, lng = STATE_CENTROID[st]
@@ -357,7 +383,7 @@ def fetch_federal_register(days=45, per_page=100):
              "company": "", "url": d.get("html_url"),
              "desc": "Federal environmental review notice (" + (d.get("publication_date") or "") +
                      "). Placement is state-level/approximate. Open the notice for the exact "
-                     "location and the comment deadline \u2014 this is the moment to intervene.",
+                     "location and the public comment deadline.",
              "source": "federal_register"}
         p["impact"] = rate_project(p, sensitivity=1)
         out.append(p)
@@ -553,6 +579,7 @@ def fetch_public_land_nepa(days=60, per_page=100):
         jitter = 0.0
         for d in data.get("results", []):
             text = " ".join(filter(None, [d.get("title"), d.get("abstract")]))
+            if not _is_project(text): continue
             st = _detect_state(text)
             # try to place it on the named national forest/grassland (local),
             # else fall back to the state centroid (approximate).
