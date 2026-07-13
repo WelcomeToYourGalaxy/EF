@@ -1,14 +1,6 @@
 [
  {
   "name": "Unicorn Riot",
-  "title": "In Athens, Albania’s Diaspora Watches a Revolt at Home, and Finds Its Own Voice",
-  "link": "https://unicornriot.ninja/2026/in-athens-albanias-diaspora-watches-a-revolt-at-home-and-finds-its-own-voice/",
-  "date": 1783896263000,
-  "sig": 5,
-  "snippet": "What started as an environmental protest in Albania related to Trump's son-in-law's business ventures became something bigger — addressing long-standing corruption, the right to information and transparency and who gets to decide Albania's future. The unrest has reached the diasp"
- },
- {
-  "name": "Unicorn Riot",
   "title": "Government Says Terabytes of Signal Chats are Central to the Case Against Minnesota 15",
   "link": "https://unicornriot.ninja/2026/government-says-terabytes-of-signal-chats-are-central-to-the-case-against-minnesota-15/",
   "date": 1783644955000,
@@ -256,6 +248,14 @@
   "snippet": "President Trump’s “Great American State Fair” has been underway for nearly a week, and its official kickoff event on June 24 perfectly encapsulated the shoddy execution and the deluded sycophancy that would follow, writes L. Cam Anderson.\nThe post Inside Freedom 250’s ‘Great Amer"
  },
  {
+  "name": "Unicorn Riot",
+  "title": "Operation Metro Surge ‘Brought Terror and Human Rights Violations to Minnesota Communities’",
+  "link": "https://unicornriot.ninja/2026/operation-metro-surge-brought-terror-and-human-rights-violations-to-minnesota-communities/",
+  "date": 1782578915000,
+  "sig": 5,
+  "snippet": "Minneapolis, MN — The federal government’s immigration enforcement surge in Minnesota earlier this year left in its wake human rights violations, widespread terror and laid bare the United States immigration enforcement’s volatile and abusive behavior, according to a Human Rights"
+ },
+ {
   "name": "Front: Mountain Valley Pipeline",
   "title": "MVP defends safety of Elliston compressor station in letter to FERC - WVTF",
   "link": "https://news.google.com/rss/articles/CBMipwFBVV95cUxORlJlSHB4a2g5X3poTy01WW5XOFlMSVVHWmludER3OTk0Wm1VU3pDMXNtT0IxdEpNVDRtMUZxck9VbzdPbDh0b1Y1Z05FdDFhRFV0YXFpc1VKR1NLam5PRFc2bXFBOFFmcWVSRkJ5TjZxWEpOWGM0bXlxanFNLVY4T3kwNjhBV3JENGFtaDE0dDluQWJGMWRtbWxzUVJTbVMzVVIxaGlpMA?oc=5",
@@ -289,14 +289,6 @@
  },
  {
   "name": "Front: data center water fight",
-  "title": "The fight against AI data centers is just beginning - The Verge",
-  "link": "https://news.google.com/rss/articles/CBMibEFVX3lxTE1EYjAxcFU4bDJ1YnZ1QlRUdlk2czhHd0JBQllYOXJKWENPZXNZazVva3RNRWRjVW91dHR0NUZ5U0h0TDkwRHB5LVF0UUEwV2ZNQW1zNVdmdk1PT0RLdGtNLXhLeDVOQnMzLVh2MA?oc=5",
-  "date": 1783857600000,
-  "sig": 3,
-  "snippet": "The fight against AI data centers is just beginning  The Verge"
- },
- {
-  "name": "Front: data center water fight",
   "title": "Data center fights pit social values, democracy and capitalism against each other - Utah News Dispatch",
   "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxPUXl4OGJPOWFRWV81QlAxSDBvMHVpMXBtQzNTRHlBaDd1VnJRcE54NVBtNkF5S3BkelVJQjhlN2NNLXpNOXJ1WGVlOXZ3Z1h5OXFPbkNicS1CWnhfbUdPQ1NybkkySF9CZ1o2WEZkWGQ5WEZTYl9QUk96Y1hqbEdIMGwxOEVucldaNEpteWtyWGJmaFpnRFMteENXdllCRGVZUTdIbU00UGxuR05iTjBtTXlnQ05zZFZMM3R2OTN3?oc=5",
   "date": 1783616925000,
@@ -305,11 +297,11 @@
  },
  {
   "name": "Front: data center water fight",
-  "title": "Meta’s Bacterial Mystery Could Poison the Data Center Well - Heatmap News",
-  "link": "https://news.google.com/rss/articles/CBMie0FVX3lxTE9hMGh2VkVBa2tjY1ZnTXVtWUk3R2ttMkg2dkpoRnNEbkVXY2s3RjZVOThaZDJQSGxVWHhENjRxcXJabHhDbkRlQjVrSVFqcTRNU0tiQXdDVEstR0NReF9UMHdtOWJRTkF1dWZSUnBOMDFTeXd2MGJWRFQ3TQ?oc=5",
-  "date": 1783628241000,
+  "title": "The fight against AI data centers is just beginning - The Verge",
+  "link": "https://news.google.com/rss/articles/CBMibEFVX3lxTE1EYjAxcFU4bDJ1YnZ1QlRUdlk2czhHd0JBQllYOXJKWENPZXNZazVva3RNRWRjVW91dHR0NUZ5U0h0TDkwRHB5LVF0UUEwV2ZNQW1zNVdmdk1PT0RLdGtNLXhLeDVOQnMzLVh2MA?oc=5",
+  "date": 1783857600000,
   "sig": 3,
-  "snippet": "Meta’s Bacterial Mystery Could Poison the Data Center Well  Heatmap News"
+  "snippet": "The fight against AI data centers is just beginning  The Verge"
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
@@ -350,6 +342,14 @@
   "date": 1783680541000,
   "sig": 3,
   "snippet": "Mexican west coast LNG terminal ships first cargoes  Lloyd's List"
+ },
+ {
+  "name": "Front: LNG terminal Gulf Coast",
+  "title": "TotalEnergies Launches First LNG Shipment from Mexico’s ECA LNG Terminal to Strengthen Asian Energy Supply - ChemAnalyst",
+  "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxPdzZJWE1RMFJPMWtyczNNQ3NRSEpXSmlFZi11TC1jLTY1TVM3cUd3d2ptcmRnQWxxeGZxaVRFM3JNOW84eGxmWTZVblNMMU0tSUZDbEFFc0h1ckJhVkxEUzB3WHFKMlJTeDk2MElIQWlIa1hDSzFSQ0NQZE9JTW9BLXZaYzBJdmU1MHI0a3FmLURQQUxNQVVuZ1V2b3BwMFFqdzdHYURKSG1ZNnUwQW9icHFSYVFCZXBpMlo1b3NR?oc=5",
+  "date": 1783588914000,
+  "sig": 3,
+  "snippet": "TotalEnergies Launches First LNG Shipment from Mexico’s ECA LNG Terminal to Strengthen Asian Energy Supply  ChemAnalyst"
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
@@ -409,19 +409,19 @@
  },
  {
   "name": "Front: old growth logging protest",
-  "title": "Tree sitters protest old-growth logging from 100 feet above the forest floor - Jefferson Public Radio",
-  "link": "https://news.google.com/rss/articles/CBMi3wFBVV95cUxPU0VDRDdRalBHejc3X3QxZ3ozVEpSVERpdkpaZEFlM25JM3NVamNYdG9XVGt3QXoxWXFZWUFObDVhM3lIcER1a1Q4NHowT1BibE1xS2RHUHluNEJxaEY1cFJweUNHeXloTVJqdjE3bTNMcE56RWxnWmxFMEJ3dTBfVlFkb2Q4QU81ZWQxbGVGeTlIblk2SHNwVnlnSU45Rm5hYlU3cWdxc3lwaHo2d3JpUGN4R2JUMmU2VkswbEluZF95SVpBckx6M3VDQ1BnZ1hDc19mNHdnS1ZXNWNaZklB?oc=5",
-  "date": 1712732400000,
-  "sig": 3,
-  "snippet": "Tree sitters protest old-growth logging from 100 feet above the forest floor  Jefferson Public Radio"
- },
- {
-  "name": "Front: old growth logging protest",
   "title": "With more old-growth logging set to begin near Fairy Creek, a new blockade has emerged to save the irreplaceable forests - Ricochet Media",
   "link": "https://news.google.com/rss/articles/CBMi9gFBVV95cUxNWHJNUE1IRk5WbFZuM2hjTzQxUFA1SXJURWZodlh0TlBERzc4T0p6TFE3TktIMEtlYkV4eEpQdTQyaHI0OVhERU5CNlBoNHQxT2RaRlVRXzVGWFNHNmpSZW9VcE1RQjZXXzRWcnVNZUxLMmdQVjhZR1NlWTQyTU1KM3dMalNyeC1kc3djLUktLWFVYTgxU1ZiM3B6bk5MbG5wRDQyaEZBQ213bEtDaXJ4eDg5U3QxREpqUURsWXRjeGRCOWRBSWxKdlYzb3NfWTBhNGNSNjlZMUhTckE0ZjF6akdnWUJvQjNzQkRnYXNLZXkxNGhKQVE?oc=5",
   "date": 1756105200000,
   "sig": 3,
   "snippet": "With more old-growth logging set to begin near Fairy Creek, a new blockade has emerged to save the irreplaceable forests  Ricochet Media"
+ },
+ {
+  "name": "Front: old growth logging protest",
+  "title": "Tree sitters protest old-growth logging from 100 feet above the forest floor - Jefferson Public Radio",
+  "link": "https://news.google.com/rss/articles/CBMi3wFBVV95cUxPU0VDRDdRalBHejc3X3QxZ3ozVEpSVERpdkpaZEFlM25JM3NVamNYdG9XVGt3QXoxWXFZWUFObDVhM3lIcER1a1Q4NHowT1BibE1xS2RHUHluNEJxaEY1cFJweUNHeXloTVJqdjE3bTNMcE56RWxnWmxFMEJ3dTBfVlFkb2Q4QU81ZWQxbGVGeTlIblk2SHNwVnlnSU45Rm5hYlU3cWdxc3lwaHo2d3JpUGN4R2JUMmU2VkswbEluZF95SVpBckx6M3VDQ1BnZ1hDc19mNHdnS1ZXNWNaZklB?oc=5",
+  "date": 1712732400000,
+  "sig": 3,
+  "snippet": "Tree sitters protest old-growth logging from 100 feet above the forest floor  Jefferson Public Radio"
  },
  {
   "name": "Front: Mountain Valley Pipeline",
@@ -435,7 +435,7 @@
   "name": "Front: Mountain Valley Pipeline",
   "title": "FERC Clears Mountain Valley to Begin Southgate Construction in North Carolina - Pipeline and Gas Journal",
   "link": "https://news.google.com/rss/articles/CBMitAFBVV95cUxOemtaWmNveVNkQ3pLbkVYOGF2Zm83Q05zTGFfQUQ2Y1FEQ1U5RjM2MUQ0bmtJNURwOFdUaXI0Y3UzUU9lTzFhRGxtbWFQZ2VpdjR6VnEyUXduYkppZDRhcXdseTd5UmFBeXRVLWh1TnZmQ0FISkRRZDd3Rm1pTy1lX3VGWHJSNVk0bHdYdHA1Wm5RRDU4VjZmTWNjMG1NSjRkZW1GajNZQnBrcDJSNjQ0UFRydm0?oc=5",
-  "date": 1782328960000,
+  "date": 1782284400000,
   "sig": 3,
   "snippet": "FERC Clears Mountain Valley to Begin Southgate Construction in North Carolina  Pipeline and Gas Journal"
  },
