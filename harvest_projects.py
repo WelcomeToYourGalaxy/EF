@@ -331,6 +331,9 @@ _PROJECT_ALLOW = (
     "resource management plan","travel management","forest plan","restoration project","landfill",
     "incinerator","data center","warehouse","subdivision","water project","canal","hydroelectric",
     "hydropower","reclamation","withdrawal","utility corridor","reroute","widening","interchange",
+    "airport","runway","fiber","broadband","cell tower","telecom","wastewater","sewer",
+    "water treatment","levee","channel","dredging","mining claim","mineral exploration",
+    "borrow pit","geophysical","reroute","interconnection","desalination","pumped storage",
 )
 _RESEARCH_DENY = (
     "marine mammal","incidental take","scientific research","research permit","cetacean","pinniped",
@@ -463,20 +466,17 @@ def _run(name, fn):
 # address, permit_number, category, contractor_name, estimated_value,
 # date_issued, latitude, longitude, city, state.
 # ---------------------------------------------------------------------------
-PERMITSTACK_CITIES = [
-    "New York","Los Angeles","Chicago","Houston","Phoenix","Philadelphia",
-    "San Antonio","San Diego","Dallas","Austin","San Jose","Jacksonville",
-    "Fort Worth","Columbus","Charlotte","San Francisco","Indianapolis","Seattle",
-    "Denver","Nashville","Oklahoma City","Portland","Las Vegas","Memphis",
-    "Louisville","Baltimore","Milwaukee","Albuquerque","Tucson","Sacramento",
-    "Kansas City","Atlanta","Miami","Raleigh","Minneapolis","New Orleans",
-    "Tampa","Richmond","Boise","Salt Lake City",
+PERMITSTACK_STATES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+    "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+    "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+    "VA","WA","WV","WI","WY","DC",
 ]
 
 def _ps_get(o, k):
     return (o.get(k) if isinstance(o, dict) else getattr(o, k, None))
 
-def fetch_permitstack(min_value=2000000):
+def fetch_permitstack(min_value=1000000, per_state_cap=120):
     key = os.environ.get("PERMITSTACK_API_KEY")
     if not key:
         print("  permitstack: no PERMITSTACK_API_KEY set (skip)"); return []
@@ -489,12 +489,16 @@ def fetch_permitstack(min_value=2000000):
     except Exception as e:
         print("  permitstack: init failed: %s" % e); return []
     out = []
-    for city in PERMITSTACK_CITIES:
+    for st in PERMITSTACK_STATES:
         try:
-            res = client.permits.search_permits(city=city, category="new_construction",
+            res = client.permits.search_permits(state=st, category="new_construction",
                                                  min_value=min_value)
             rows = _ps_get(res, "results") or (res if isinstance(res, list) else []) or []
+            n = 0
             for r in rows:
+                if n >= per_state_cap:
+                    break
+                n += 1
                 lat = _ps_get(r, "latitude"); lng = _ps_get(r, "longitude")
                 if lat is None or lng is None:
                     continue
@@ -518,7 +522,7 @@ def fetch_permitstack(min_value=2000000):
                     "source": "permitstack",
                 })
         except Exception as e:
-            print("  permitstack %s: %s" % (city, e))
+            print("  permitstack %s: %s" % (st, e))
         time.sleep(2.2)  # free plan = 30 req/min; ~2.2s keeps us safely under
     return out
 
