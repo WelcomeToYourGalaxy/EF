@@ -493,6 +493,7 @@ def fetch_permitstack(min_value=2000000):
                 })
         except Exception as e:
             print("  permitstack %s: %s" % (city, e))
+        time.sleep(2.2)  # free plan = 30 req/min; ~2.2s keeps us safely under
     return out
 
 # ---------------------------------------------------------------------------
@@ -531,7 +532,8 @@ def _geocode_place(q):
 def fetch_public_land_nepa(days=60, per_page=100):
     out = []
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-    for slug, label in [("forest-service", "USFS")]:
+    for slug, label in [("bureau-of-land-management", "BLM"),
+                        ("forest-service", "USFS")]:
         q = {"conditions[agencies][]": slug,
              "conditions[type][]": "NOTICE",
              "conditions[publication_date][gte]": since,
@@ -643,8 +645,7 @@ def main():
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
     items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES for p in fetch_socrata(cfg)])
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
-    items += _run("blm_arcgis", fetch_blm_arcgis)               # BLM, PRECISE coordinates
-    items += _run("forest_service_nepa", fetch_public_land_nepa)# USFS via Federal Register
+    items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
     items += _run("ejatlas", fetch_ejatlas)                     # global EJ conflicts (local export)
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
