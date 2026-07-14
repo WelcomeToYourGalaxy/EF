@@ -855,13 +855,22 @@ def _iati_pos(a):
 def _iati_activities(data):
     if isinstance(data, list): return data
     if isinstance(data, dict):
-        for k in ("iati-activity", "iati_activity", "results", "response", "docs"):
+        for k in ("iati-activity", "iati_activity", "activities", "activity",
+                  "results", "response", "docs", "result"):
             v = data.get(k)
             if isinstance(v, list): return v
-        for v in data.values():
             if isinstance(v, dict):
-                inner = v.get("iati-activity")
-                if isinstance(inner, list): return inner
+                for kk in ("iati-activity", "activities", "docs"):
+                    if isinstance(v.get(kk), list): return v[kk]
+        # deep fallback: first list of dicts anywhere
+        def firstlist(o):
+            if isinstance(o, list) and o and isinstance(o[0], dict): return o
+            if isinstance(o, dict):
+                for vv in o.values():
+                    r = firstlist(vv)
+                    if r: return r
+            return None
+        return firstlist(data) or []
     return []
 
 # recipient countries with lots of geocoded development activity
@@ -879,6 +888,11 @@ def fetch_iati(per=1000):
             data = _get_json(base + "?" + urllib.parse.urlencode(params))
         except Exception as e:
             print("  iati %s failed: %s" % (cc, e)); continue
+        if scanned == 0 and cc == _IATI_COUNTRIES[0]:
+            if isinstance(data, dict):
+                print("  iati [shape] dict keys: %s" % list(data.keys())[:8])
+            else:
+                print("  iati [shape] type: %s len: %s" % (type(data).__name__, len(data) if hasattr(data,"__len__") else "?"))
         acts = _iati_activities(data)
         if not acts:
             time.sleep(0.3); continue
@@ -989,18 +1003,32 @@ def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
 # UK PlanIt -- national aggregator of UK planning applications (free, NO key).
 # GeoJSON API with real coordinates: a UK analogue to PermitStack.
 # ---------------------------------------------------------------------------
-def fetch_ukplanit(days=90, pg_sz=500):
+def fetch_ukplanit(days=90, pg_sz=200):
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     today = datetime.date.today().isoformat()
-    # NB: no app_size filter -- combining it with the date window returned zero.
-    params = {"start_date": since, "end_date": today, "pg_sz": pg_sz}
-    url = "https://planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
-    try:
-        gj = _get_json(url)
-    except Exception as e:
-        print("  uk planit failed: %s" % e); return []
-    feats = gj.get("features", []) if isinstance(gj, dict) else []
-    print("  uk planit: %d applications returned" % len(feats))
+    # PlanIt is built for local queries -- a country-sized bbox returns nothing.
+    # Tile Great Britain into ~1.5-degree boxes and gather each.
+    tiles = []
+    for lat0 in (50.0, 51.5, 53.0, 54.5, 56.0, 57.5):
+        for lng0 in (-6.0, -4.5, -3.0, -1.5, 0.0):
+            tiles.append("%s,%s,%s,%s" % (lng0, lat0, lng0 + 1.5, lat0 + 1.5))
+    feats = []; errs = 0
+    for bb in tiles:
+        params = {"bbox": bb, "start_date": since, "end_date": today,
+                  "pg_sz": pg_sz, "limit": pg_sz}
+        url = "https://planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
+                "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                gj = json.loads(r.read().decode("utf-8", "replace"))
+            feats += gj.get("features", []) if isinstance(gj, dict) else []
+        except Exception as e:
+            errs += 1
+            if errs == 1: print("  uk planit tile error: %s" % e)
+        time.sleep(0.4)
+    print("  uk planit: %d applications across %d tiles (%d tile errors)" % (len(feats), len(tiles), errs))
     out = []
     for f in feats:
         try:
