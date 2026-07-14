@@ -24,8 +24,13 @@ jobs:
           git add wire.json
           if git diff --staged --quiet; then echo "no changes"; exit 0; fi
           git commit -m "chore: refresh wire.json"
+          BR="$(git rev-parse --abbrev-ref HEAD)"
           for i in 1 2 3 4 5; do
-            git pull --rebase --autostash origin "$(git rev-parse --abbrev-ref HEAD)" && git push && exit 0
+            git fetch origin "$BR" || true
+            if git merge -X ours FETCH_HEAD -m "merge remote; keep fresh wire.json" && git push origin HEAD:"$BR"; then
+              echo "pushed"; exit 0
+            fi
+            git merge --abort 2>/dev/null || true
             echo "push race, retry $i"; sleep 6
           done
           echo "push failed after retries"; exit 1
