@@ -381,16 +381,23 @@ def fetch_federal_register(days=45, per_page=100):
         if not _is_project(text): continue
         st = _detect_state(text)
         if not st: continue
-        lat, lng = STATE_CENTROID[st]
-        jitter += 0.11  # fan notices out around the centroid so they don't stack
+        pl = _extract_place(text)
+        coords = _geocode_place(pl + ", " + st, "us") if pl else None
+        if coords:
+            lat, lng = coords; precise = True
+            note = "Placed from the notice title (" + pl + ")."
+        else:
+            lat, lng = STATE_CENTROID[st]; jitter += 0.11
+            lat = round(lat + (jitter % 0.8) - 0.4, 4)
+            lng = round(lng + ((jitter * 1.7) % 0.8) - 0.4, 4)
+            precise = False; note = "Placement is state-level/approximate."
         p = {"name": (d.get("title") or "Federal environmental review")[:140],
              "type": _infer_type(text), "state": st,
-             "lat": round(lat + (jitter % 0.8) - 0.4, 4),
-             "lng": round(lng + ((jitter * 1.7) % 0.8) - 0.4, 4),
+             "lat": round(lat, 5), "lng": round(lng, 5), "precise": precise,
              "size": "", "status": "In federal review (comment window may be open)",
              "company": "", "url": d.get("html_url"),
              "desc": "Federal environmental review notice (" + (d.get("publication_date") or "") +
-                     "). Placement is state-level/approximate. Open the notice for the exact "
+                     "). " + note + " Open the notice for the exact "
                      "location and the public comment deadline.",
              "source": "federal_register"}
         p["impact"] = rate_project(p, sensitivity=1)
@@ -555,24 +562,41 @@ def fetch_permitstack(min_value=1000000, per_state_cap=500):
 # Register API filtered by agency (free, no key). State-centroid geocode.
 # ---------------------------------------------------------------------------
 _GEO_CACHE = {}
+_GEO_CALLS = [0]
+_GEO_MAX = 90   # Nominatim politeness budget per run (1 req/sec)
+_PLACE_RE = re.compile(
+    r"([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){0,3}\s+"
+    r"(?:County|Parish|Borough|City|Township|District|Province|Governorate|Prefecture|"
+    r"Municipality|Reservation|Field Office|Ranger District|Wilderness|"
+    r"National\s+(?:Forests?|Grasslands?|Park|Monument|Preserve|Recreation Area)))\b")
+
+def _extract_place(text):
+    """Pull a specific place phrase out of a title/name if one is present."""
+    m = _PLACE_RE.search(text or "")
+    return m.group(1).strip() if m else None
 _FOREST_RE = re.compile(
     r"([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){0,4}\s+"
     r"National\s+(?:Forests?|Grasslands?|Recreation Area|Monument|Preserve))")
 
-def _geocode_place(q):
-    """Best-effort geocode of a named public land (e.g. a national forest) via
-    OpenStreetMap Nominatim. Free; we honor the 1 req/sec usage policy and fall
-    back to state placement if it is unavailable. Returns (lat, lng) or None."""
+def _geocode_place(q, cc="us"):
+    """Best-effort geocode of a named place via OpenStreetMap Nominatim (free).
+    cc biases to a country (ISO2, or None for worldwide). Honors the 1 req/sec
+    policy and a per-run call budget. Returns (lat, lng) or None."""
     if not q:
         return None
-    if q in _GEO_CACHE:
-        return _GEO_CACHE[q]
+    key = (q, cc)
+    if key in _GEO_CACHE:
+        return _GEO_CACHE[key]
+    if _GEO_CALLS[0] >= _GEO_MAX:
+        return None
     res = None
     try:
-        url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
-            {"q": q, "format": "json", "limit": 1, "countrycodes": "us"})
+        params = {"q": q, "format": "json", "limit": 1}
+        if cc: params["countrycodes"] = cc
+        url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(url, headers={
             "User-Agent": "activist-project-map/1.0 (wheelock.chris@gmail.com)"})
+        _GEO_CALLS[0] += 1
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             arr = json.loads(r.read().decode("utf-8", "replace"))
         if arr:
@@ -580,19 +604,22 @@ def _geocode_place(q):
         time.sleep(1.1)
     except Exception:
         res = None
-    _GEO_CACHE[q] = res
+    _GEO_CACHE[key] = res
     return res
 
 def fetch_public_land_nepa(days=60, per_page=100):
     out = []
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-    for slug, label in [("bureau-of-land-management", "BLM"),
-                        ("forest-service", "USFS")]:
-        q = {"conditions[agencies][]": slug,
-             "conditions[type][]": "NOTICE",
+    for mode, val, label in [("term", "bureau of land management", "BLM"),
+                             ("agency", "forest-service", "USFS")]:
+        q = {"conditions[type][]": "NOTICE",
              "conditions[publication_date][gte]": since,
              "per_page": per_page, "order": "newest",
              "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url"]}
+        if mode == "agency":
+            q["conditions[agencies][]"] = val
+        else:
+            q["conditions[term]"] = val
         parts = []
         for k, v in q.items():
             if isinstance(v, list):
@@ -633,7 +660,7 @@ def fetch_public_land_nepa(days=60, per_page=100):
                  "desc": (label + " action on public land (" +
                           (d.get("publication_date") or "") + "). " + place_note +
                           " Open the notice for the comment deadline."),
-                 "source": "public_land_nepa"}
+                 "precise": False, "source": "public_land_nepa"}
             p["impact"] = rate_project(p, sensitivity=1)
             out.append(p)
     return out
@@ -741,6 +768,16 @@ def fetch_world_bank(rows=1000):
             if not ll: continue
             lat, lng = ll
             jitter += 0.17
+            # try to sharpen from the title (e.g. "Dhaka ... Project" -> geocode Dhaka)
+            _pl = _extract_place(pr.get("project_name") or "")
+            _cc2 = cc.lower() if len(cc) == 2 else None
+            _co = _geocode_place(_pl + ", " + str(cn), _cc2) if _pl else None
+            if _co:
+                _lat, _lng, _precise = _co[0], _co[1], True
+            else:
+                _lat = round(lat + (jitter % 1.6) - 0.8, 4)
+                _lng = round(lng + ((jitter * 1.7) % 1.6) - 0.8, 4)
+                _precise = False
             amt = pr.get("totalamt") or pr.get("totalcommamt") or ""
             try:
                 amtf = float(str(amt).replace(",", "")) if amt else 0
@@ -752,16 +789,16 @@ def fetch_world_bank(rows=1000):
             p = {"name": (pr.get("project_name") or "World Bank project")[:140],
                  "type": (sec or "Development project"),
                  "state": str(cn),
-                 "lat": round(lat + (jitter % 1.6) - 0.8, 4),
-                 "lng": round(lng + ((jitter * 1.7) % 1.6) - 0.8, 4),
+                 "lat": round(_lat, 5), "lng": round(_lng, 5), "precise": _precise,
                  "size": size, "status": str(pr.get("status") or "Active"),
                  "company": "World Bank",
                  "url": ("https://projects.worldbank.org/en/projects-operations/"
                          "project-detail/" + str(pr.get("id") or "")),
                  "desc": ("World Bank-financed project in " + str(cn) +
                           ((" \u00b7 " + size) if size else "") +
-                          ". Country-level placement \u2014 open the project page for the exact "
-                          "location and status."),
+                          (". Located from title." if _precise else
+                            ". Country-level placement \u2014 open the project page for the exact "
+                            "location and status.")),
                  "source": "world_bank"}
             p["impact"] = rate_project(p, sensitivity=1)
             out.append(p)
