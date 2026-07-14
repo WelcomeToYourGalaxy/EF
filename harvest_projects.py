@@ -229,20 +229,31 @@ def fetch_land_matrix(csv_path="data/land_matrix_deals.csv"):
 # GEM publishes downloadable trackers (Excel/CSV) under a data-use policy at
 # globalenergymonitor.org/projects/. Pipeline: download the relevant tracker(s),
 # read with pandas, keep US rows with coords, map columns -> normalized dict.
+# only NEW / upcoming energy projects -- never operating or retired infrastructure
+_GEM_NEW = ("announced", "pre-construction", "preconstruction", "construction",
+            "proposed", "permitted", "in development", "planned")
+_GEM_DEAD = ("operating", "retired", "cancelled", "canceled", "mothballed",
+             "shelved", "closed", "abandoned", "decommissioned")
+
 def _gem_norm(pr, lat, lng):
     if lat is None or lng is None: return None
+    status = str(_first(pr, "Status", "status") or "").strip().lower()
+    # keep only projects that are upcoming/under construction (not existing infra)
+    if any(k in status for k in _GEM_DEAD): return None
+    if not any(k in status for k in _GEM_NEW): return None
     name = _first(pr, "Project Name", "project_name", "Unit Name", "Name",
                   "Pipeline Name", "Mine Name")
-    typ = _first(pr, "Type", "Fuel", "Category", "Sector") or "energy infrastructure"
+    typ = _first(pr, "Type", "Fuel", "Category", "Sector") or "energy project"
     st = _first(pr, "Subnational unit (province/state)", "State/Province", "State", "Region")
     ctry = _first(pr, "Country/Area", "Country")
     mw = _num(_first(pr, "Capacity (MW)", "Capacity", "capacity_mw"))
     p = {"name": (name or "Energy project")[:120], "type": str(typ),
-         "state": st or ctry or "", "lat": lat, "lng": lng, "mw": mw,
+         "state": st or ctry or "", "lat": lat, "lng": lng, "mw": mw, "precise": True,
          "company": _first(pr, "Owner", "Parent", "Operator") or "",
          "status": _first(pr, "Status", "status") or "",
          "size": ("%s MW" % int(mw)) if mw else "",
-         "desc": "Energy/extraction infrastructure tracked by Global Energy Monitor.",
+         "desc": ("Proposed / under-construction energy project tracked by Global Energy "
+                  "Monitor (CC BY 4.0). Status: " + (status or "unknown") + "."),
          "source": "gem"}
     p["impact"] = rate_project(p, sensitivity=1)
     return p
@@ -806,20 +817,348 @@ def fetch_world_bank(rows=1000):
             continue
     return out
 
+
+# ---------------------------------------------------------------------------
+# IATI (Code for IATI mirror) -- global development activities WITH real
+# coordinates (free, no key). We keep only activities that carry a location
+# so this adds PRECISE global points, complementing World Bank's country dots.
+# ---------------------------------------------------------------------------
+def _iati_find(obj, want):
+    """Recursively find the first value whose key ends with `want`."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and k.split(".")[-1].split("}")[-1].lower() == want:
+                if isinstance(v, (str, int, float)): return v
+                if isinstance(v, list) and v and isinstance(v[0], (str, int, float)): return v[0]
+        for v in obj.values():
+            r = _iati_find(v, want)
+            if r is not None: return r
+    elif isinstance(obj, list):
+        for it in obj:
+            r = _iati_find(it, want)
+            if r is not None: return r
+    return None
+
+def _iati_pos(a):
+    v = _iati_find(a, "pos")
+    if isinstance(v, str):
+        parts = v.replace(",", " ").split()
+        if len(parts) >= 2:
+            try:
+                lat, lng = float(parts[0]), float(parts[1])
+                if -90 <= lat <= 90 and -180 <= lng <= 180 and (lat or lng):
+                    return (lat, lng)
+            except Exception:
+                pass
+    return None
+
+def _iati_activities(data):
+    if isinstance(data, list): return data
+    if isinstance(data, dict):
+        for k in ("iati-activity", "iati_activity", "results", "response", "docs"):
+            v = data.get(k)
+            if isinstance(v, list): return v
+        for v in data.values():
+            if isinstance(v, dict):
+                inner = v.get("iati-activity")
+                if isinstance(inner, list): return inner
+    return []
+
+def fetch_iati(pages=4, per=1000):
+    base = "https://datastore.codeforiati.org/api/1/access/activity.json"
+    out = []; scanned = 0; withloc = 0
+    for pg in range(pages):
+        params = {"activity-status": "2", "limit": per, "offset": pg * per, "unwrap": "True"}
+        try:
+            data = _get_json(base + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            if pg == 0: print("  iati failed: %s" % e)
+            break
+        acts = _iati_activities(data)
+        if not acts: break
+        for a in acts:
+            scanned += 1
+            ll = _iati_pos(a)
+            if not ll: continue
+            withloc += 1
+            nm = _iati_find(a, "narrative") or _iati_find(a, "title") or "Development activity"
+            cn = _iati_find(a, "recipient-country") or _iati_find(a, "code") or ""
+            org = _iati_find(a, "reporting-org") or _iati_find(a, "narrative") or ""
+            p = {"name": str(nm)[:140], "type": "Development / aid project",
+                 "state": str(cn), "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                 "precise": True, "size": "", "status": "Active",
+                 "company": str(org)[:80],
+                 "url": "https://d-portal.org/q.html?aid=" + str(_iati_find(a, "iati-identifier") or ""),
+                 "desc": "Development/aid project (IATI). Reported location.",
+                 "source": "iati"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        time.sleep(1.0)
+    print("  iati: scanned %d active activities, %d had coordinates" % (scanned, withloc))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ArcGIS Hub -- direct discovery of city/county building-permit datasets
+# (free, NO key, NO daily cap). Conservative: only keeps permits from datasets
+# that expose a valuation field, filtered to significant value, so it can never
+# flood the map with tiny permits. Complements PermitStack's breadth.
+# ---------------------------------------------------------------------------
+_HUB_VAL_RE = re.compile(r"(valuation|est.?value|job.?value|construction.?cost|"
+                         r"total.?value|declared.?value|permit.?value|est.?cost|"
+                         r"^value$|^cost$|^amount$|projectcost|jobvalue)", re.I)
+_HUB_NAME_RE = re.compile(r"(work.?desc|description|permit.?type|type.?desc|"
+                          r"scope|project.?name|proposed.?use|permit.?class)", re.I)
+
+def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
+    try:
+        surl = "https://opendata.arcgis.com/api/v3/datasets?" + urllib.parse.urlencode({
+            "q": "building permits", "page[size]": "50"})
+        sdata = _get_json(surl)
+    except Exception as e:
+        print("  arcgis hub search failed: %s" % e); return []
+    ds = sdata.get("data", []) if isinstance(sdata, dict) else []
+    ds = [d for d in ds
+          if "permit" in str((d.get("attributes") or {}).get("name", "")).lower()]
+    print("  arcgis hub: %d permit datasets discovered" % len(ds))
+    out = []; used = 0
+    for d in ds[:max_datasets]:
+        attrs = d.get("attributes") or {}
+        url = attrs.get("url")
+        if not url or "/FeatureServer" not in url and "/MapServer" not in url:
+            continue
+        try:
+            q = url.rstrip("/") + "/query?" + urllib.parse.urlencode({
+                "where": "1=1", "outFields": "*", "f": "geojson",
+                "outSR": "4326", "resultRecordCount": per_ds})
+            gj = _get_json(q)
+        except Exception:
+            continue
+        used += 1
+        for f in (gj.get("features") or []):
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") != "Point" or len(c) < 2:
+                    continue
+                lng, lat = float(c[0]), float(c[1])
+                props = f.get("properties") or {}
+                val = None
+                for k, v in props.items():
+                    if _HUB_VAL_RE.search(str(k)) and isinstance(v, (int, float)) and v > 0:
+                        val = float(v); break
+                if val is None or val < min_value:
+                    continue
+                nm = None
+                for k, v in props.items():
+                    if _HUB_NAME_RE.search(str(k)) and isinstance(v, str) and v.strip():
+                        nm = v; break
+                p = {"name": str(nm or attrs.get("name") or "Permitted project")[:140],
+                     "type": "New construction", "state": "",
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                     "size": "$%s" % format(int(val), ","),
+                     "status": "Permit on file", "company": "",
+                     "url": "https://hub.arcgis.com/datasets/" + str(d.get("id") or ""),
+                     "desc": "Building permit via " + str(attrs.get("name") or "city open data") + ".",
+                     "source": "arcgis_hub"}
+                p["impact"] = rate_project(p, sensitivity=0)
+                out.append(p)
+            except Exception:
+                continue
+        time.sleep(0.4)
+    print("  arcgis hub: queried %d datasets, %d significant permits" % (used, len(out)))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# UK PlanIt -- national aggregator of UK planning applications (free, NO key).
+# GeoJSON API with real coordinates: a UK analogue to PermitStack.
+# ---------------------------------------------------------------------------
+def fetch_planit(days=60, pg_sz=400, pages=4):
+    out = []
+    end = datetime.date.today().isoformat()
+    start = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    for pg in range(pages):
+        params = {"start_date": start, "end_date": end,
+                  "app_size": "Large", "pg_sz": pg_sz, "page": pg + 1}
+        url = "https://www.planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
+        try:
+            gj = _get_json(url)
+        except Exception as e:
+            if pg == 0: print("  planit failed: %s" % e)
+            break
+        feats = gj.get("features", []) if isinstance(gj, dict) else []
+        if not feats: break
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") != "Point" or len(c) < 2: continue
+                lng, lat = float(c[0]), float(c[1])
+                pr = f.get("properties") or {}
+                nm = (pr.get("description") or pr.get("address") or "UK planning application")
+                out.append({
+                    "name": str(nm)[:140], "type": "Planning application",
+                    "state": "United Kingdom",
+                    "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                    "size": "", "status": str(pr.get("app_state") or "Submitted"),
+                    "company": "", "url": pr.get("url") or "https://www.planit.org.uk/",
+                    "desc": ("UK planning application" +
+                             ((" \u00b7 " + str(pr.get("address"))) if pr.get("address") else "") +
+                             ". Source: PlanIt (planit.org.uk)."),
+                    "source": "planit"})
+                out[-1]["impact"] = rate_project(out[-1], sensitivity=0)
+            except Exception:
+                continue
+        time.sleep(0.5)
+    print("  planit: %d UK planning applications" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# UK PlanIt -- national aggregator of UK planning applications (free, no key).
+# GeoJSON with real coordinates. We keep LARGE, recent applications so it maps
+# significant developments, the UK counterpart to PermitStack. planit.org.uk
+# ---------------------------------------------------------------------------
+def fetch_ukplanit(days=60, pg_sz=500):
+    since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    today = datetime.date.today().isoformat()
+    params = {"app_size": "Large", "start_date": since, "end_date": today, "pg_sz": pg_sz}
+    url = "https://planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
+    try:
+        gj = _get_json(url)
+    except Exception as e:
+        print("  uk planit failed: %s" % e); return []
+    feats = gj.get("features", []) if isinstance(gj, dict) else []
+    out = []
+    for f in feats:
+        try:
+            geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+            if geom.get("type") != "Point" or len(c) < 2: continue
+            lng, lat = float(c[0]), float(c[1])
+            pr = f.get("properties") or {}
+            desc = pr.get("description") or "Planning application"
+            addr = pr.get("address") or ""
+            state = pr.get("app_state") or ""
+            p = {"name": str(desc)[:140], "type": "Development (UK planning)",
+                 "state": pr.get("authority_name") or "United Kingdom",
+                 "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                 "size": pr.get("app_size") or "", "status": state, "company": "",
+                 "url": pr.get("link") or "https://planit.org.uk/",
+                 "desc": ("UK planning application" + ((" (" + state + ")") if state else "") +
+                          ((" \u00b7 " + addr) if addr else "") + "."),
+                 "source": "uk_planit"}
+            p["impact"] = rate_project(p, sensitivity=0)
+            out.append(p)
+        except Exception:
+            continue
+    print("  uk planit: %d large applications" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Australia -- EPBC Act referrals (national environmental assessments), a
+# public ArcGIS feature service (CC BY, weekly). Referrals are areas, so we
+# place each at its centroid. Free, no key. fed.dcceew.gov.au
+# ---------------------------------------------------------------------------
+def _geom_center(geom):
+    t = geom.get("type"); c = geom.get("coordinates")
+    if not c: return None
+    if t == "Point" and len(c) >= 2:
+        try: return (float(c[1]), float(c[0]))
+        except Exception: return None
+    pts = []
+    def collect(x):
+        if isinstance(x, (list, tuple)):
+            if len(x) >= 2 and isinstance(x[0], (int, float)) and isinstance(x[1], (int, float)):
+                pts.append((float(x[1]), float(x[0])))
+            else:
+                for i in x: collect(i)
+    collect(c)
+    if not pts: return None
+    return (sum(a for a, _ in pts) / len(pts), sum(b for _, b in pts) / len(pts))
+
+def _arcgis_item_query(item_id, layer=0, rec=2000):
+    meta = _get_json("https://www.arcgis.com/sharing/rest/content/items/%s?f=json" % item_id)
+    url = (meta or {}).get("url")
+    if not url: return None
+    q = url.rstrip("/") + "/%d/query?" % layer + urllib.parse.urlencode({
+        "where": "1=1", "outFields": "*", "f": "geojson", "outSR": "4326",
+        "resultRecordCount": rec})
+    return _get_json(q)
+
+def fetch_epbc_au():
+    try:
+        gj = _arcgis_item_query("ee02ed7773d44c6fa799bf558c70f81a")
+    except Exception as e:
+        print("  epbc au failed: %s" % e); return []
+    if not gj or not isinstance(gj, dict):
+        print("  epbc au: no service response"); return []
+    feats = gj.get("features", [])
+    out = []
+    for f in feats:
+        try:
+            ll = _geom_center(f.get("geometry") or {})
+            if not ll: continue
+            pr = f.get("properties") or {}
+            up = {str(k).upper(): v for k, v in pr.items()}
+            nm = (up.get("TITLE") or up.get("REFERRAL_TITLE") or up.get("PROPOSAL_NAME")
+                  or up.get("PROPOSAL") or up.get("NAME") or "EPBC referral")
+            status = str(up.get("STATUS") or up.get("DECISION") or up.get("ASSESSMENT_STATUS") or "")
+            ref = str(up.get("EPBC_NUMBER") or up.get("REFERENCE") or up.get("REFERRAL_NUMBER") or "")
+            p = {"name": str(nm)[:140], "type": "Environmental referral (EPBC)",
+                 "state": str(up.get("STATE") or "Australia"),
+                 "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": True,
+                 "size": "", "status": status, "company": str(up.get("PROPONENT") or "")[:80],
+                 "url": "https://epbcpublicportal.environment.gov.au/",
+                 "desc": ("Australian EPBC Act referral" + ((" \u00b7 " + ref) if ref else "") +
+                          ((" \u00b7 " + status) if status else "") + ". Placed at the referral area centroid."),
+                 "source": "epbc_au"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  epbc au: %d referrals" % len(out))
+    return out
+
 def main():
     items = []
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
     _SOCRATA_OFF = {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org"}  # 400s; PermitStack covers these
+    items += _run("arcgis_hub", fetch_arcgis_hub)               # US city/county permits (no cap)
     items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
                                               if cfg.get("domain") not in _SOCRATA_OFF
                                               for p in fetch_socrata(cfg)])
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
     items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
+    items += _run("planit", fetch_planit)                       # UK planning applications (no key)
+    items += _run("uk_planit", fetch_ukplanit)                  # UK national planning applications
+    items += _run("epbc_au", fetch_epbc_au)                     # Australia national environmental referrals
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
+    items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
+    items += _run("gem", fetch_gem)                             # GLOBAL: new energy projects (local files)
     items += _run("ejatlas", fetch_ejatlas)                     # global EJ conflicts (local export)
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
     items.sort(key=lambda p: -(p.get("impact") or 0))
+    # per-source preservation: if a source comes back much thinner than what is
+    # already saved (e.g. PermitStack hit its daily rate limit), keep the prior
+    # entries for that source instead of clobbering them.
+    if os.path.exists("projects.json"):
+        try:
+            ex = json.load(open("projects.json", encoding="utf-8"))
+            exl = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
+            from collections import defaultdict
+            old_by, new_by = defaultdict(list), defaultdict(list)
+            for q in exl: old_by[q.get("source", "")].append(q)
+            for q in items: new_by[q.get("source", "")].append(q)
+            for src, oldrows in old_by.items():
+                new_n = len(new_by.get(src, []))
+                if len(oldrows) >= 10 and new_n < len(oldrows) * 0.5:
+                    items = [q for q in items if q.get("source") != src] + oldrows
+                    print("  [preserve] %s came back thin (%d < %d) -- kept prior entries"
+                          % (src or "(none)", new_n, len(oldrows)))
+        except Exception as e:
+            print("  [preserve] skipped: %s" % e)
+
     # anti-wipe: never replace a healthy projects.json with a thin/empty harvest
     if len(items) < 4 and os.path.exists("projects.json"):
         try:

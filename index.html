@@ -251,7 +251,7 @@
 .proj-src-box:not(.open) .psrc-body{display:none;}
 .proj-src-box.open .psrc-tog{transform:rotate(180deg);}
 .psrc-tog{transition:transform .15s;}
-.psrc-body{margin:2px 0 0;}
+.psrc-body{margin:2px 0 0;} .psrc-cat{font-size:10px;font-weight:700;color:#9fb4d8;margin:6px 0 1px;letter-spacing:.2px;}
 .psrc-row{display:block;font-size:10px;color:#c3d2ee;margin:3px 0;line-height:1.3;cursor:pointer;}
 .psrc-l{font-weight:600;} .psrc-n{color:#7f95bd;font-weight:400;}
 .psrc-d{display:block;color:#8aa0c8;margin-left:18px;font-size:9.5px;}
@@ -1315,12 +1315,30 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
   function stars(n){return Array(n+1).join("\u2605")+Array(6-n).join("\u2606");}
   var pjLayer=null, pjData=null, pjOn=true;
   var PJ_SRC=[
-    {k:"permitstack",label:"US building permits",desc:"New construction, last 30 days \u00b7 all 50 states"},
-    {k:"socrata",label:"City permits (deep history)",desc:"Full permit history \u00b7 Chicago, Seattle"},
-    {k:"federal_register",label:"Federal reviews (EIS)",desc:"US environmental impact statements"},
-    {k:"public_land_nepa",label:"Public-land actions",desc:"BLM & Forest Service (NEPA)"},
-    {k:"world_bank",label:"World Bank projects",desc:"WB-financed projects worldwide"},
-    {k:"ejatlas",label:"EJ conflicts",desc:"Environmental-justice conflicts (global)"}
+    {k:"permitstack",cat:"\ud83c\udfd7\ufe0f Building permits",label:"New construction \u2014 nationwide",
+     desc:"When a big new building is approved, the city issues a permit. This shows those permits from all 50 states \u2014 but only ones filed in the last 30 days, so it\u2019s what\u2019s newest and just starting."},
+    {k:"socrata",cat:"\ud83c\udfd7\ufe0f Building permits",label:"Chicago & Seattle \u2014 full history",
+     desc:"The same kind of building permits, but the complete back-catalog for just two cities (Chicago and Seattle), including older projects \u2014 not only the last 30 days."},
+    {k:"arcgis_hub",cat:"\ud83c\udfd7\ufe0f Building permits",label:"More cities & counties",
+     desc:"Large building permits pulled directly from individual city and county open-data sites \u2014 extra coverage beyond the nationwide feed, with no request limit."},
+    {k:"planit",cat:"\ud83c\uddec\ud83c\udde7 UK planning",label:"UK planning applications",
+     desc:"Large planning applications from across the UK (420 local authorities), via the national PlanIt aggregator \u2014 the UK equivalent of the US permit feeds."},
+    {k:"federal_register",cat:"\ud83c\uddfa\ud83c\uddf8 US government reviews",label:"Federal environmental reviews",
+     desc:"Large projects that need a US environmental review \u2014 pipelines, mines, highways. Each is in an official public-comment period, so people can still weigh in."},
+    {k:"public_land_nepa",cat:"\ud83c\uddfa\ud83c\uddf8 US government reviews",label:"Public-land projects",
+     desc:"Things proposed on national forests and public land \u2014 logging, grazing, drilling and mining leases \u2014 by the Bureau of Land Management or Forest Service."},
+    {k:"world_bank",cat:"\ud83c\udf0d Global",label:"World Bank projects",
+     desc:"Development projects the World Bank funds worldwide \u2014 roads, power, water, schools. Shown by country unless the title names a specific city."},
+    {k:"iati",cat:"\ud83c\udf0d Global",label:"Aid & development projects",
+     desc:"Aid-funded projects worldwide from many donors (UN, USAID, EU and others), shown only where the record includes a real map location."},
+    {k:"gem",cat:"\ud83c\udf0d Global",label:"New energy projects",
+     desc:"Proposed and under-construction energy projects worldwide (power plants, pipelines, mines) from Global Energy Monitor \u2014 new builds only, not existing infrastructure."},
+    {k:"uk_planit",cat:"\ud83c\udf10 Other countries",label:"UK planning applications",
+     desc:"Large development proposals across the UK (all 420 local planning authorities), from the national PlanIt aggregator \u2014 the UK counterpart to the US permit feed."},
+    {k:"epbc_au",cat:"\ud83c\udf10 Other countries",label:"Australia \u2014 EPBC referrals",
+     desc:"Projects across Australia referred for national environmental assessment (mines, developments, clearing) under the EPBC Act."},
+    {k:"ejatlas",cat:"\ud83c\udf0d Global",label:"Environmental-justice conflicts",
+     desc:"Community fights against harmful projects worldwide, documented by the Environmental Justice Atlas."}
   ];
   function pjSrcGroup(s){ s=s||""; return s.indexOf("socrata")===0?"socrata":s; }
   var activeProjSrc=new Set(PJ_SRC.map(function(s){return s.k;}));
@@ -1329,7 +1347,9 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     if(box.getAttribute("data-built")==="1") return;
     var counts={}; ((pjData&&pjData.projects)||[]).forEach(function(p){ var g=pjSrcGroup(p.source); counts[g]=(counts[g]||0)+1; });
     var h='<div class="psrc-head" onclick="this.parentNode.classList.toggle(\'open\')"><span>Filter by data source</span><span class="psrc-tog">\u25be</span></div><div class="psrc-body">';
+    var lastCat=null;
     PJ_SRC.forEach(function(s){ if(!counts[s.k]) return;
+      if(s.cat!==lastCat){ h+='<div class="psrc-cat">'+s.cat+'</div>'; lastCat=s.cat; }
       h+='<label class="psrc-row"><input type="checkbox" data-src="'+s.k+'" checked> <span class="psrc-l">'+s.label+' <span class="psrc-n">'+counts[s.k]+'</span></span><span class="psrc-d">'+s.desc+'</span></label>';
     });
     h+='</div>'; box.innerHTML=h; box.setAttribute('data-built','1');
