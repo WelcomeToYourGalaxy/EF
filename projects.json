@@ -1,6 +1,6 @@
 {
  "_meta": {
-  "generated": "2026-07-14T22:10:12.238320Z",
+  "generated": "2026-07-14T22:29:36.543612Z",
   "count": 5600,
   "sources": "socrata permits, land matrix, global energy monitor, epa eis, ferc, ejatlas",
   "rating_scale": "1 minor / 2 local / 3 regional / 4 major / 5 landscape"
