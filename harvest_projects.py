@@ -1016,7 +1016,7 @@ def fetch_ukplanit(days=90, pg_sz=200):
     for bb in tiles:
         params = {"bbox": bb, "start_date": since, "end_date": today,
                   "pg_sz": pg_sz, "limit": pg_sz}
-        url = "https://planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
+        url = "https://www.planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
