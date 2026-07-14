@@ -864,18 +864,24 @@ def _iati_activities(data):
                 if isinstance(inner, list): return inner
     return []
 
-def fetch_iati(pages=4, per=1000):
+# recipient countries with lots of geocoded development activity
+_IATI_COUNTRIES = ["KE","ET","TZ","UG","NG","GH","CD","MZ","ML","NE","SN","RW","ZM",
+                   "MW","BD","NP","PK","IN","ID","PH","MM","KH","VN","LK","AF","YE",
+                   "HT","BO","PE","CO","GT","HN","NI","EG","MA","JO","LB","SS","SO"]
+
+def fetch_iati(per=1000):
     base = "https://datastore.codeforiati.org/api/1/access/activity.json"
     out = []; scanned = 0; withloc = 0
-    for pg in range(pages):
-        params = {"activity-status": "2", "limit": per, "offset": pg * per, "unwrap": "True"}
+    for cc in _IATI_COUNTRIES:
+        params = {"recipient-country": cc, "activity-status": "2",
+                  "limit": per, "offset": 0, "unwrap": "True"}
         try:
             data = _get_json(base + "?" + urllib.parse.urlencode(params))
         except Exception as e:
-            if pg == 0: print("  iati failed: %s" % e)
-            break
+            print("  iati %s failed: %s" % (cc, e)); continue
         acts = _iati_activities(data)
-        if not acts: break
+        if not acts:
+            time.sleep(0.3); continue
         for a in acts:
             scanned += 1
             ll = _iati_pos(a)
@@ -893,8 +899,9 @@ def fetch_iati(pages=4, per=1000):
                  "source": "iati"}
             p["impact"] = rate_project(p, sensitivity=1)
             out.append(p)
-        time.sleep(1.0)
-    print("  iati: scanned %d active activities, %d had coordinates" % (scanned, withloc))
+        time.sleep(0.4)
+    print("  iati: scanned %d active activities across %d countries, %d had coordinates"
+          % (scanned, len(_IATI_COUNTRIES), withloc))
     return out
 
 
@@ -935,6 +942,7 @@ def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
         except Exception:
             continue
         used += 1
+        no_val_kept = 0   # cap value-less records per dataset so they can't flood
         for f in (gj.get("features") or []):
             try:
                 geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
@@ -946,8 +954,16 @@ def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
                 for k, v in props.items():
                     if _HUB_VAL_RE.search(str(k)) and isinstance(v, (int, float)) and v > 0:
                         val = float(v); break
-                if val is None or val < min_value:
-                    continue
+                if val is not None:
+                    if val < min_value:
+                        continue
+                    size = "$%s" % format(int(val), ",")
+                else:
+                    # dataset exposes no cost field: still keep a capped sample
+                    if no_val_kept >= 40:
+                        continue
+                    no_val_kept += 1
+                    size = ""
                 nm = None
                 for k, v in props.items():
                     if _HUB_NAME_RE.search(str(k)) and isinstance(v, str) and v.strip():
@@ -955,7 +971,7 @@ def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
                 p = {"name": str(nm or attrs.get("name") or "Permitted project")[:140],
                      "type": "New construction", "state": "",
                      "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
-                     "size": "$%s" % format(int(val), ","),
+                     "size": size,
                      "status": "Permit on file", "company": "",
                      "url": "https://hub.arcgis.com/datasets/" + str(d.get("id") or ""),
                      "desc": "Building permit via " + str(attrs.get("name") or "city open data") + ".",
@@ -973,61 +989,18 @@ def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
 # UK PlanIt -- national aggregator of UK planning applications (free, NO key).
 # GeoJSON API with real coordinates: a UK analogue to PermitStack.
 # ---------------------------------------------------------------------------
-def fetch_planit(days=60, pg_sz=400, pages=4):
-    out = []
-    end = datetime.date.today().isoformat()
-    start = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-    for pg in range(pages):
-        params = {"start_date": start, "end_date": end,
-                  "app_size": "Large", "pg_sz": pg_sz, "page": pg + 1}
-        url = "https://www.planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
-        try:
-            gj = _get_json(url)
-        except Exception as e:
-            if pg == 0: print("  planit failed: %s" % e)
-            break
-        feats = gj.get("features", []) if isinstance(gj, dict) else []
-        if not feats: break
-        for f in feats:
-            try:
-                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
-                if geom.get("type") != "Point" or len(c) < 2: continue
-                lng, lat = float(c[0]), float(c[1])
-                pr = f.get("properties") or {}
-                nm = (pr.get("description") or pr.get("address") or "UK planning application")
-                out.append({
-                    "name": str(nm)[:140], "type": "Planning application",
-                    "state": "United Kingdom",
-                    "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
-                    "size": "", "status": str(pr.get("app_state") or "Submitted"),
-                    "company": "", "url": pr.get("url") or "https://www.planit.org.uk/",
-                    "desc": ("UK planning application" +
-                             ((" \u00b7 " + str(pr.get("address"))) if pr.get("address") else "") +
-                             ". Source: PlanIt (planit.org.uk)."),
-                    "source": "planit"})
-                out[-1]["impact"] = rate_project(out[-1], sensitivity=0)
-            except Exception:
-                continue
-        time.sleep(0.5)
-    print("  planit: %d UK planning applications" % len(out))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# UK PlanIt -- national aggregator of UK planning applications (free, no key).
-# GeoJSON with real coordinates. We keep LARGE, recent applications so it maps
-# significant developments, the UK counterpart to PermitStack. planit.org.uk
-# ---------------------------------------------------------------------------
-def fetch_ukplanit(days=60, pg_sz=500):
+def fetch_ukplanit(days=90, pg_sz=500):
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     today = datetime.date.today().isoformat()
-    params = {"app_size": "Large", "start_date": since, "end_date": today, "pg_sz": pg_sz}
+    # NB: no app_size filter -- combining it with the date window returned zero.
+    params = {"start_date": since, "end_date": today, "pg_sz": pg_sz}
     url = "https://planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
     try:
         gj = _get_json(url)
     except Exception as e:
         print("  uk planit failed: %s" % e); return []
     feats = gj.get("features", []) if isinstance(gj, dict) else []
+    print("  uk planit: %d applications returned" % len(feats))
     out = []
     for f in feats:
         try:
@@ -1119,6 +1092,50 @@ def fetch_epbc_au():
     print("  epbc au: %d referrals" % len(out))
     return out
 
+
+# ---------------------------------------------------------------------------
+# Canada -- Impact Assessment Registry (Assessment Inventory), the federal
+# major-projects registry, as a public geo.ca ArcGIS MapServer. Free, no key.
+# ---------------------------------------------------------------------------
+def fetch_iaac_ca():
+    base = ("https://maps-cartes.services.geo.ca/server_serveur/rest/services/"
+            "IAAC/assessment_inventory_en/MapServer/0/query")
+    q = urllib.parse.urlencode({"where": "1=1", "outFields": "*", "f": "geojson",
+                                "outSR": "4326", "resultRecordCount": "2000"})
+    try:
+        gj = _get_json(base + "?" + q)
+    except Exception as e:
+        print("  iaac ca failed: %s" % e); return []
+    if not isinstance(gj, dict):
+        print("  iaac ca: no response"); return []
+    if gj.get("error"):
+        print("  iaac ca error: %s" % str(gj.get("error"))[:150]); return []
+    out = []
+    for f in gj.get("features", []):
+        try:
+            ll = _geom_center(f.get("geometry") or {})
+            if not ll: continue
+            pr = f.get("properties") or {}
+            up = {str(k).upper(): v for k, v in pr.items()}
+            nm = (up.get("NAME") or up.get("PROJECT_NAME") or up.get("TITLE")
+                  or up.get("PROJECT") or "Impact assessment")
+            status = str(up.get("STATUS") or up.get("PHASE") or up.get("STAGE") or "")
+            p = {"name": str(nm)[:140], "type": "Impact assessment (Canada)",
+                 "state": str(up.get("PROVINCE") or up.get("REGION") or "Canada"),
+                 "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": True,
+                 "size": "", "status": status, "company": str(up.get("PROPONENT") or "")[:80],
+                 "url": "https://iaac-aeic.gc.ca/050/evaluations",
+                 "desc": ("Canadian federal impact assessment" +
+                          ((" \u00b7 " + status) if status else "") +
+                          ". From the Impact Assessment Registry."),
+                 "source": "iaac_ca"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  iaac ca: %d assessments" % len(out))
+    return out
+
 def main():
     items = []
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
@@ -1129,9 +1146,9 @@ def main():
                                               for p in fetch_socrata(cfg)])
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
     items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
-    items += _run("planit", fetch_planit)                       # UK planning applications (no key)
     items += _run("uk_planit", fetch_ukplanit)                  # UK national planning applications
     items += _run("epbc_au", fetch_epbc_au)                     # Australia national environmental referrals
+    items += _run("iaac_ca", fetch_iaac_ca)                     # Canada federal impact assessments
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
     items += _run("gem", fetch_gem)                             # GLOBAL: new energy projects (local files)
