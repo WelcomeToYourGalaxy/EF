@@ -166,9 +166,14 @@ def fetch_socrata(cfg, limit=500):
         rows = _get_json(url)
     except Exception as e:
         print("  socrata %s failed: %s" % (cfg.get("city"), e)); return out
+    _DONE = ("complete", "closed", "expired", "withdrawn", "cancel", "final",
+             "void", "revoked", "stop work", "inactive", "issued - closed", "certificate of occupancy")
     for r in rows:
         lat, lng = _socrata_point(r, cfg)
         if lat is None or lng is None: continue
+        _st = str(r.get(cfg.get("status")) or "").lower()
+        if any(k in _st for k in _DONE):   # drop projects that are no longer active
+            continue
         val = _num(r.get(cfg.get("value")))
         p = {"name": r.get(cfg["name"]) or "Permitted project",
              "type": r.get(cfg.get("type")) or "development",
@@ -476,7 +481,7 @@ PERMITSTACK_STATES = [
 def _ps_get(o, k):
     return (o.get(k) if isinstance(o, dict) else getattr(o, k, None))
 
-def fetch_permitstack(min_value=1000000, per_state_cap=120):
+def fetch_permitstack(min_value=1000000, per_state_cap=500):
     key = os.environ.get("PERMITSTACK_API_KEY")
     if not key:
         print("  permitstack: no PERMITSTACK_API_KEY set (skip)"); return []
@@ -489,41 +494,60 @@ def fetch_permitstack(min_value=1000000, per_state_cap=120):
     except Exception as e:
         print("  permitstack: init failed: %s" % e); return []
     out = []
+    HIGH_VOLUME = {"CA","TX","FL","NY","IL","PA","OH","GA","NC","AZ","WA","CO","VA","NJ",
+                   "MA","TN","MD","MI","MN","OR","IN","MO","WI","SC","UT","NV"}
+    BUDGET = 99                      # free plan: 100 requests/day -- use almost all of it
+    def _val(r):
+        try: return float(_ps_get(r, "estimated_value") or 0)
+        except Exception: return 0.0
+    def _page(st, pg):
+        kw = {"state": st, "category": "new_construction", "min_value": min_value}
+        if pg > 1: kw["page"] = pg
+        res = client.permits.search_permits(**kw)
+        return _ps_get(res, "results") or (res if isinstance(res, list) else []) or []
+    rows_by_state = {st: [] for st in PERMITSTACK_STATES}
+    reqs = 0
+    # pass 1: page 1 for every state
     for st in PERMITSTACK_STATES:
+        if reqs >= BUDGET: break
+        try: rows_by_state[st] += list(_page(st, 1))
+        except Exception as e: print("  permitstack %s p1: %s" % (st, e))
+        reqs += 1; time.sleep(2.2)
+    # pass 2: page 2, high-volume states first, until the daily budget is spent
+    for st in sorted(PERMITSTACK_STATES, key=lambda s: 0 if s in HIGH_VOLUME else 1):
+        if reqs >= BUDGET: break
         try:
-            res = client.permits.search_permits(state=st, category="new_construction",
-                                                 min_value=min_value)
-            rows = _ps_get(res, "results") or (res if isinstance(res, list) else []) or []
-            n = 0
-            for r in rows:
-                if n >= per_state_cap:
-                    break
-                n += 1
-                lat = _ps_get(r, "latitude"); lng = _ps_get(r, "longitude")
-                if lat is None or lng is None:
-                    continue
-                val = _ps_get(r, "estimated_value") or 0
-                addr = _ps_get(r, "address") or ""
-                nm = (addr or _ps_get(r, "category") or "New construction")
-                try: size = "$%s" % format(int(val), ",") if val else ""
-                except Exception: size = ""
-                out.append({
-                    "name": str(nm)[:140],
-                    "type": "New construction",
-                    "state": _ps_get(r, "state") or "",
-                    "lat": round(float(lat), 5), "lng": round(float(lng), 5),
-                    "size": size,
-                    "status": "Permit on file",
-                    "company": _ps_get(r, "contractor_name") or "",
-                    "url": "",
-                    "desc": ("Building permit" + (" \u00b7 " + addr if addr else "") +
-                             (" \u00b7 issued " + str(_ps_get(r, "date_issued"))
-                              if _ps_get(r, "date_issued") else "") + "."),
-                    "source": "permitstack",
-                })
-        except Exception as e:
-            print("  permitstack %s: %s" % (st, e))
-        time.sleep(2.2)  # free plan = 30 req/min; ~2.2s keeps us safely under
+            more = list(_page(st, 2))
+            if more: rows_by_state[st] += more
+        except Exception:
+            pass   # page param unsupported / no more pages -- skip quietly
+        reqs += 1; time.sleep(2.2)
+    print("  permitstack: used %d/%d daily requests" % (reqs, BUDGET))
+    # build items: biggest-value first, capped per state
+    for st, rows in rows_by_state.items():
+        rows.sort(key=_val, reverse=True)
+        n = 0
+        for r in rows:
+            if n >= per_state_cap: break
+            lat = _ps_get(r, "latitude"); lng = _ps_get(r, "longitude")
+            if lat is None or lng is None: continue
+            n += 1
+            val = _ps_get(r, "estimated_value") or 0
+            addr = _ps_get(r, "address") or ""
+            nm = (addr or _ps_get(r, "category") or "New construction")
+            try: size = "$%s" % format(int(val), ",") if val else ""
+            except Exception: size = ""
+            out.append({
+                "name": str(nm)[:140], "type": "New construction",
+                "state": _ps_get(r, "state") or "",
+                "lat": round(float(lat), 5), "lng": round(float(lng), 5),
+                "size": size, "status": "Permit on file",
+                "company": _ps_get(r, "contractor_name") or "", "url": "",
+                "desc": ("Building permit" + (" \u00b7 " + addr if addr else "") +
+                         (" \u00b7 issued " + str(_ps_get(r, "date_issued"))
+                          if _ps_get(r, "date_issued") else "") + "."),
+                "source": "permitstack",
+            })
     return out
 
 # ---------------------------------------------------------------------------
@@ -671,12 +695,90 @@ def fetch_blm_arcgis():
     return out
 
 
+
+# ---------------------------------------------------------------------------
+# World Bank -- ACTIVE financed projects worldwide (free API, no key). GLOBAL.
+# Country-level placement via the WB country API centroids (capital coords).
+# ---------------------------------------------------------------------------
+def _wb_country_centroids():
+    cents = {}
+    try:
+        data = _get_json("https://api.worldbank.org/v2/country?format=json&per_page=400")
+        rows = data[1] if isinstance(data, list) and len(data) > 1 else []
+        for c in rows:
+            try:
+                lat = float(c.get("latitude")); lng = float(c.get("longitude"))
+            except (TypeError, ValueError):
+                continue
+            for k in (c.get("iso2Code"), c.get("id"), c.get("name")):
+                if k: cents[str(k).upper()] = (lat, lng)
+    except Exception as e:
+        print("  world bank centroids failed: %s" % e)
+    return cents
+
+def fetch_world_bank(rows=1000):
+    cents = _wb_country_centroids()
+    if not cents:
+        print("  world bank: no country centroids (skip)"); return []
+    fl = ("id,project_name,countryname,countryshortname,countrycode,totalamt,"
+          "totalcommamt,boardapprovaldate,sector1,status,regionname")
+    url = ("https://search.worldbank.org/api/v2/projects?format=json"
+           "&status_exact=Active&rows=%d&fl=%s" % (rows, urllib.parse.quote(fl)))
+    try:
+        data = _get_json(url)
+    except Exception as e:
+        print("  world bank failed: %s" % e); return []
+    projs = data.get("projects", data) if isinstance(data, dict) else data
+    if isinstance(projs, dict): projs = list(projs.values())
+    print("  world bank: %d active projects returned" % (len(projs) if projs else 0))
+    out = []; jitter = 0.0
+    for pr in (projs or []):
+        try:
+            if not isinstance(pr, dict): continue
+            cc = str(pr.get("countrycode") or "").upper()
+            cn = pr.get("countryshortname") or pr.get("countryname") or ""
+            ll = cents.get(cc) or cents.get(str(cn).upper())
+            if not ll: continue
+            lat, lng = ll
+            jitter += 0.17
+            amt = pr.get("totalamt") or pr.get("totalcommamt") or ""
+            try:
+                amtf = float(str(amt).replace(",", "")) if amt else 0
+                size = ("$%sM" % format(int(amtf), ",")) if amtf else ""
+            except Exception:
+                size = ""
+            sec = pr.get("sector1")
+            if isinstance(sec, dict): sec = sec.get("Name") or sec.get("name") or ""
+            p = {"name": (pr.get("project_name") or "World Bank project")[:140],
+                 "type": (sec or "Development project"),
+                 "state": str(cn),
+                 "lat": round(lat + (jitter % 1.6) - 0.8, 4),
+                 "lng": round(lng + ((jitter * 1.7) % 1.6) - 0.8, 4),
+                 "size": size, "status": str(pr.get("status") or "Active"),
+                 "company": "World Bank",
+                 "url": ("https://projects.worldbank.org/en/projects-operations/"
+                         "project-detail/" + str(pr.get("id") or "")),
+                 "desc": ("World Bank-financed project in " + str(cn) +
+                          ((" \u00b7 " + size) if size else "") +
+                          ". Country-level placement \u2014 open the project page for the exact "
+                          "location and status."),
+                 "source": "world_bank"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    return out
+
 def main():
     items = []
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
-    items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES for p in fetch_socrata(cfg)])
+    _SOCRATA_OFF = {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org"}  # 400s; PermitStack covers these
+    items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
+                                              if cfg.get("domain") not in _SOCRATA_OFF
+                                              for p in fetch_socrata(cfg)])
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
     items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
+    items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("ejatlas", fetch_ejatlas)                     # global EJ conflicts (local export)
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
