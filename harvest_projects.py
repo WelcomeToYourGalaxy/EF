@@ -572,6 +572,74 @@ def fetch_permitstack(min_value=1000000, per_state_cap=500):
 # BLM + U.S. Forest Service NEPA actions on PUBLIC LAND, via the Federal
 # Register API filtered by agency (free, no key). State-centroid geocode.
 # ---------------------------------------------------------------------------
+
+def _best_name(props, keys=()):
+    """Pick a real project name from an unknown ArcGIS schema: try known keys,
+    then fall back to the longest human-looking string in the record."""
+    up = {str(k).upper(): v for k, v in (props or {}).items()}
+    for k in keys:
+        v = up.get(k)
+        if isinstance(v, str) and len(v.strip()) > 3:
+            return v.strip()
+    cands = []
+    for k, v in (props or {}).items():
+        if not isinstance(v, str): continue
+        s = v.strip()
+        if len(s) < 8 or len(s) > 220: continue
+        if s.lower().startswith("http"): continue
+        if re.match(r"^\d{4}-\d{2}-\d{2}", s): continue
+        if re.match(r"^[A-Z0-9_\-]{2,12}$", s): continue     # looks like a code
+        if " " not in s: continue                             # single token -> likely a code
+        cands.append(s)
+    return max(cands, key=len) if cands else None
+
+# ---- structured sector classification (fixes vague titles) ------------------
+_WB_BUILD_SECTOR = ("transportation", "transport", "energy", "extractive", "water",
+                    "sanitation", "waste", "urban", "mining", "construction",
+                    "industry", "irrigation")
+_WB_PROG_SECTOR = ("public administration", "education", "health", "financial",
+                   "social protection", "information and communication")
+# OECD DAC sector codes that mean physical works
+_IATI_BUILD_PREFIX = ("140", "21", "23", "322", "323", "43030", "31140")
+_IATI_POLICY_CODE = ("14010", "21010", "23110", "23010", "41010")
+
+def _sector_is_build(sector_text):
+    s = str(sector_text or "").lower()
+    if not s: return None                       # unknown -> caller falls back to title
+    if any(w in s for w in _WB_PROG_SECTOR): return False
+    if any(w in s for w in _WB_BUILD_SECTOR): return True
+    return False
+
+def _dac_is_build(code):
+    c = str(code or "").strip()
+    if not c.isdigit(): return None             # unknown -> caller falls back to title
+    if c in _IATI_POLICY_CODE: return False
+    return any(c.startswith(pfx) for pfx in _IATI_BUILD_PREFIX)
+
+def _iati_sector_code(a):
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if "sector" in str(k).lower():
+                    if isinstance(v, dict):
+                        c = v.get("code") or v.get("@code")
+                        if c: return str(c)
+                    if isinstance(v, list):
+                        for it in v:
+                            if isinstance(it, dict):
+                                c = it.get("code") or it.get("@code")
+                                if c: return str(c)
+                    if isinstance(v, (str, int)): return str(v)
+            for v in o.values():
+                r = walk(v)
+                if r: return r
+        elif isinstance(o, list):
+            for it in o:
+                r = walk(it)
+                if r: return r
+        return None
+    return walk(a)
+
 _GEO_CACHE = {}
 _GEO_CALLS = [0]
 _GEO_MAX = 90   # Nominatim politeness budget per run (1 req/sec)
@@ -780,6 +848,16 @@ def fetch_world_bank(rows=1000):
             lat, lng = ll
             jitter += 0.17
             # try to sharpen from the title (e.g. "Dhaka ... Project" -> geocode Dhaka)
+            _secraw = pr.get("sector1")
+            if isinstance(_secraw, dict):
+                _secraw = _secraw.get("Name") or _secraw.get("name") or ""
+            _title = str(pr.get("project_name") or "")
+            _sb = _sector_is_build(_secraw)          # True / False / None(unknown)
+            _keep = _sb if _sb is not None else _is_build(_title)
+            if _sb is False and _is_build(_title):
+                _keep = True                          # sector says programme but title names works
+            if not _keep:
+                continue
             _pl = _extract_place(pr.get("project_name") or "")
             _cc2 = cc.lower() if len(cc) == 2 else None
             _co = _geocode_place(_pl + ", " + str(cn), _cc2) if _pl else None
@@ -817,6 +895,66 @@ def fetch_world_bank(rows=1000):
             continue
     return out
 
+
+
+# ---------------------------------------------------------------------------
+# Physical-build filter for development sources (IATI / World Bank).
+# Their portfolios mix PHYSICAL works (roads, dams, plants, pipes) with
+# INTANGIBLE programmes (budget support, training, policy loans, GHG targets).
+# This keeps the former. Title-based, so it is a heuristic: a project is kept
+# only if it names physical works and does not read as a pure programme.
+# ---------------------------------------------------------------------------
+_BUILD_WORDS = (
+    "road", "highway", "expressway", "motorway", "bridge", "tunnel", "corridor",
+    "rail", "railway", "metro", "tramway", "port", "harbour", "harbor", "jetty",
+    "airport", "runway", "terminal", "dam", "reservoir", "weir", "barrage",
+    "irrigation", "canal", "pipeline", "water supply", "waterworks", "borehole",
+    "sanitation", "sewer", "sewerage", "wastewater", "drainage", "treatment plant",
+    "power plant", "powerplant", "hydropower", "hydroelectric", "geothermal",
+    "solar park", "solar plant", "off-grid solar", "wind farm", "wind power",
+    "transmission", "substation", "grid", "electrification", "interconnector",
+    "refinery", "lng", "gas plant", "mine", "mining", "quarry", "smelter",
+    "landfill", "incinerator", "waste facility", "housing", "settlement upgrading",
+    "urban development", "urban upgrading", "market construction", "hospital",
+    "clinic construction", "school construction", "classroom", "campus",
+    "construction", "rehabilitation of", "reconstruction", "upgrading of",
+    "rural roads", "feeder road", "bus rapid transit", "brt", "cable car",
+    "flood protection", "embankment", "coastal protection", "seawall",
+    "storage facility", "warehouse", "silo", "cold chain", "transmission line",
+    "water security", "water and sanitation", "sanitation development",
+    # broader physical signals
+    "solar", "wind", "hydro", "infrastructure", "electricity", "electric power",
+    "energy access", "expansion of energy", "power sector", "water supply",
+    "water project", "roads", "road project", "transport project", "transport corridor",
+    "rural access", "urban mobility", "railway line", "plant", "facility",
+    "network expansion", "distribution network", "sewage", "water resources",
+    "flood", "drainage", "bridge", "port project", "logistics hub",
+)
+_PROGRAM_WORDS = (
+    "policy financing", "development policy", "dpf", "budget support",
+    "cat-ddo", "credit line", "guarantee", "technical assistance",
+    "capacity building", "institutional strengthening", "governance",
+    "public financial management", "civil service", "statistics", "census",
+    "monitoring and evaluation", "jobs and economic", "economic transformation",
+    "livelihood", "cash transfer", "social protection", "social safety",
+    "income support", "access to finance", "enterprise recovery", "green finance",
+    "investment and trade", "trade facilitation", "digital economy",
+    "e-government", "carbon abatement", "climate action program",
+    "emission reduction", "ghg", "gender", "youth empowerment", "curriculum",
+    "equity in learning", "learning outcomes", "health systems", "nutrition",
+    "immunization", "devolution support", "service delivery", "resilience program",
+    "sector efficiency", "value chain", "financial inclusion", "pension",
+)
+def _is_build(text):
+    """True if a development project title reads as PHYSICAL construction."""
+    t = (text or "").lower()
+    if not any(b in t for b in _BUILD_WORDS):
+        return False
+    # a physical word can still sit inside a pure programme title; require that
+    # the title is not dominated by programme language
+    prog_hits = sum(1 for w in _PROGRAM_WORDS if w in t)
+    build_hits = sum(1 for b in _BUILD_WORDS if b in t)
+    return build_hits >= prog_hits
 
 # ---------------------------------------------------------------------------
 # IATI (Code for IATI mirror) -- global development activities WITH real
@@ -874,9 +1012,22 @@ def _iati_activities(data):
     return []
 
 # recipient countries with lots of geocoded development activity
-_IATI_COUNTRIES = ["KE","ET","TZ","UG","NG","GH","CD","MZ","ML","NE","SN","RW","ZM",
-                   "MW","BD","NP","PK","IN","ID","PH","MM","KH","VN","LK","AF","YE",
-                   "HT","BO","PE","CO","GT","HN","NI","EG","MA","JO","LB","SS","SO"]
+_IATI_COUNTRIES = [
+    # Africa (AfDB region + bilateral donors)
+    "DZ","AO","BJ","BW","BF","BI","CM","CV","CF","TD","KM","CG","CD","CI","DJ","EG",
+    "GQ","ER","SZ","ET","GA","GM","GH","GN","GW","KE","LS","LR","LY","MG","MW","ML",
+    "MR","MU","MA","MZ","NA","NE","NG","RW","ST","SN","SC","SL","SO","ZA","SS","SD",
+    "TZ","TG","TN","UG","ZM","ZW",
+    # Asia & Pacific (ADB region)
+    "AF","AM","AZ","BD","BT","KH","CN","FJ","GE","IN","ID","KZ","KI","KG","LA","MY",
+    "MV","MH","FM","MN","MM","NR","NP","PK","PW","PG","PH","WS","SB","LK","TJ","TH",
+    "TL","TO","TM","TV","UZ","VU","VN",
+    # Latin America & Caribbean (IDB region)
+    "AR","BZ","BO","BR","CL","CO","CR","CU","DM","DO","EC","SV","GD","GT","GY","HT",
+    "HN","JM","MX","NI","PA","PY","PE","LC","VC","SR","TT","UY","VE",
+    # Middle East, Europe & Central Asia (EBRD / EIB neighbourhood)
+    "AL","BA","IQ","JO","LB","MD","ME","MK","PS","RS","SY","TR","UA","XK","YE","IR",
+]
 
 def fetch_iati(per=1000):
     base = "https://datastore.codeforiati.org/api/1/access/activity.json"
@@ -900,8 +1051,14 @@ def fetch_iati(per=1000):
             scanned += 1
             ll = _iati_pos(a)
             if not ll: continue
-            withloc += 1
             nm = _iati_find(a, "narrative") or _iati_find(a, "title") or "Development activity"
+            _db = _dac_is_build(_iati_sector_code(a))    # True / False / None(unknown)
+            _keep = _db if _db is not None else _is_build(str(nm))
+            if _db is False and _is_build(str(nm)):
+                _keep = True
+            if not _keep:
+                continue
+            withloc += 1
             cn = _iati_find(a, "recipient-country") or _iati_find(a, "code") or ""
             org = _iati_find(a, "reporting-org") or _iati_find(a, "narrative") or ""
             p = {"name": str(nm)[:140], "type": "Development / aid project",
@@ -1077,37 +1234,112 @@ def _geom_center(geom):
     if not pts: return None
     return (sum(a for a, _ in pts) / len(pts), sum(b for _, b in pts) / len(pts))
 
-def _arcgis_item_query(item_id, layer=0, rec=2000):
-    meta = _get_json("https://www.arcgis.com/sharing/rest/content/items/%s?f=json" % item_id)
-    url = (meta or {}).get("url")
-    if not url: return None
-    q = url.rstrip("/") + "/%d/query?" % layer + urllib.parse.urlencode({
-        "where": "1=1", "outFields": "*", "f": "geojson", "outSR": "4326",
-        "resultRecordCount": rec})
-    return _get_json(q)
+def _arcgis_query_all(base_url, layer=0, page=2000, max_pages=20, label=""):
+    """Query an ArcGIS layer with resultOffset paging -- returns ALL features."""
+    feats = []
+    for pg in range(max_pages):
+        q = base_url.rstrip("/") + "/%d/query?" % layer + urllib.parse.urlencode({
+            "where": "1=1", "outFields": "*", "f": "geojson", "outSR": "4326",
+            "resultRecordCount": page, "resultOffset": pg * page})
+        try:
+            gj = _get_json(q)
+        except Exception as e:
+            if pg == 0: print("  %s query failed: %s" % (label, e))
+            break
+        if not isinstance(gj, dict) or gj.get("error"):
+            if pg == 0 and isinstance(gj, dict):
+                print("  %s error: %s" % (label, str(gj.get("error"))[:120]))
+            break
+        got = gj.get("features") or []
+        feats += got
+        if len(got) < page: break          # last page
+        time.sleep(0.4)
+    return feats
+
+def _arcgis_item_url(item_id):
+    try:
+        meta = _get_json("https://www.arcgis.com/sharing/rest/content/items/%s?f=json" % item_id)
+        return (meta or {}).get("url")
+    except Exception as e:
+        print("  arcgis item lookup failed: %s" % e); return None
+
+# plausible extent per national source -- drops records whose coordinates are
+# clearly wrong (bad source data), while KEEPING legitimate external territories.
+_SRC_BOX = {
+    # (south, north, west, east)
+    "iaac_ca": (41.0, 84.0, -141.5, -52.0),          # Canada (no overseas territory)
+    "epbc_au": (-90.0, -8.0, 44.0, 170.0),           # Australia + Antarctic/Indian/Pacific territories
+}
+
+# Fallback placement when a record's coordinates are clearly wrong: put it at the
+# province/national centroid and flag it approximate (dashed ring) rather than
+# deleting it -- the project is real, only its coordinates are unusable.
+_CA_PROV = {
+    "ALBERTA": (55.0, -115.0), "AB": (55.0, -115.0),
+    "BRITISH COLUMBIA": (54.0, -125.0), "BC": (54.0, -125.0),
+    "MANITOBA": (55.0, -97.0), "MB": (55.0, -97.0),
+    "NEW BRUNSWICK": (46.5, -66.0), "NB": (46.5, -66.0),
+    "NEWFOUNDLAND AND LABRADOR": (53.0, -60.0), "NEWFOUNDLAND": (53.0, -60.0), "NL": (53.0, -60.0),
+    "NOVA SCOTIA": (45.0, -63.0), "NS": (45.0, -63.0),
+    "NORTHWEST TERRITORIES": (64.0, -119.0), "NT": (64.0, -119.0),
+    "NUNAVUT": (70.0, -90.0), "NU": (70.0, -90.0),
+    "ONTARIO": (50.0, -85.0), "ON": (50.0, -85.0),
+    "PRINCE EDWARD ISLAND": (46.4, -63.2), "PE": (46.4, -63.2),
+    "QUEBEC": (52.0, -72.0), "QUÉBEC": (52.0, -72.0), "QC": (52.0, -72.0),
+    "SASKATCHEWAN": (54.0, -106.0), "SK": (54.0, -106.0),
+    "YUKON": (63.0, -135.0), "YT": (63.0, -135.0),
+}
+_NAT_CENTER = {"iaac_ca": (56.13, -106.35), "epbc_au": (-25.27, 133.78)}
+
+def _fallback_center(src, region_text):
+    """(lat, lng, label) for approximate placement, or None."""
+    rt = str(region_text or "").strip().upper()
+    if src == "iaac_ca" and rt:
+        # exact 2-letter code match first (never substring: "NT" is inside "ONTARIO")
+        if len(rt) == 2 and rt in _CA_PROV:
+            v = _CA_PROV[rt]
+            return (v[0], v[1], rt)
+        # then full names, longest first so "NEWFOUNDLAND AND LABRADOR" wins
+        for k in sorted([k for k in _CA_PROV if len(k) > 2], key=len, reverse=True):
+            if k in rt:
+                v = _CA_PROV[k]
+                return (v[0], v[1], k.title())
+    c = _NAT_CENTER.get(src)
+    if c:
+        return (c[0], c[1], "national")
+    return None
+
+def _box_ok(src, lat, lng):
+    b = _SRC_BOX.get(src)
+    if not b: return True
+    s, n, w, e = b
+    return (lat is not None and lng is not None and s <= lat <= n and w <= lng <= e)
 
 def fetch_epbc_au():
-    try:
-        gj = _arcgis_item_query("ee02ed7773d44c6fa799bf558c70f81a")
-    except Exception as e:
-        print("  epbc au failed: %s" % e); return []
-    if not gj or not isinstance(gj, dict):
-        print("  epbc au: no service response"); return []
-    feats = gj.get("features", [])
-    out = []
+    url = _arcgis_item_url("ee02ed7773d44c6fa799bf558c70f81a")
+    if not url:
+        print("  epbc au: could not resolve service url"); return []
+    feats = _arcgis_query_all(url, label="epbc au")
+    out = []; dropped = 0
     for f in feats:
         try:
             ll = _geom_center(f.get("geometry") or {})
             if not ll: continue
+            _au_approx = False
+            if not _box_ok("epbc_au", ll[0], ll[1]):
+                fb = _fallback_center("epbc_au", "")
+                if not fb:
+                    dropped += 1; continue
+                ll = (fb[0], fb[1]); _au_approx = True; dropped += 1
             pr = f.get("properties") or {}
             up = {str(k).upper(): v for k, v in pr.items()}
-            nm = (up.get("TITLE") or up.get("REFERRAL_TITLE") or up.get("PROPOSAL_NAME")
-                  or up.get("PROPOSAL") or up.get("NAME") or "EPBC referral")
+            nm = _best_name(pr, ("TITLE", "REFERRAL_TITLE", "PROPOSAL_NAME",
+                                 "PROPOSAL", "NAME")) or "EPBC referral"
             status = str(up.get("STATUS") or up.get("DECISION") or up.get("ASSESSMENT_STATUS") or "")
             ref = str(up.get("EPBC_NUMBER") or up.get("REFERENCE") or up.get("REFERRAL_NUMBER") or "")
             p = {"name": str(nm)[:140], "type": "Environmental referral (EPBC)",
                  "state": str(up.get("STATE") or "Australia"),
-                 "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": True,
+                 "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": not _au_approx,
                  "size": "", "status": status, "company": str(up.get("PROPONENT") or "")[:80],
                  "url": "https://epbcpublicportal.environment.gov.au/",
                  "desc": ("Australian EPBC Act referral" + ((" \u00b7 " + ref) if ref else "") +
@@ -1117,7 +1349,7 @@ def fetch_epbc_au():
             out.append(p)
         except Exception:
             continue
-    print("  epbc au: %d referrals" % len(out))
+    print("  epbc au: %d referrals (%d re-placed at national level)" % (len(out), dropped))
     return out
 
 
@@ -1125,43 +1357,418 @@ def fetch_epbc_au():
 # Canada -- Impact Assessment Registry (Assessment Inventory), the federal
 # major-projects registry, as a public geo.ca ArcGIS MapServer. Free, no key.
 # ---------------------------------------------------------------------------
+_CA_KEYS_SHOWN = []
+
 def fetch_iaac_ca():
     base = ("https://maps-cartes.services.geo.ca/server_serveur/rest/services/"
-            "IAAC/assessment_inventory_en/MapServer/0/query")
-    q = urllib.parse.urlencode({"where": "1=1", "outFields": "*", "f": "geojson",
-                                "outSR": "4326", "resultRecordCount": "2000"})
-    try:
-        gj = _get_json(base + "?" + q)
-    except Exception as e:
-        print("  iaac ca failed: %s" % e); return []
-    if not isinstance(gj, dict):
-        print("  iaac ca: no response"); return []
-    if gj.get("error"):
-        print("  iaac ca error: %s" % str(gj.get("error"))[:150]); return []
-    out = []
-    for f in gj.get("features", []):
+            "IAAC/assessment_inventory_en/MapServer")
+    feats = _arcgis_query_all(base, label="iaac ca")
+    out = []; dropped = 0
+    for f in feats:
         try:
             ll = _geom_center(f.get("geometry") or {})
             if not ll: continue
+            pr0 = f.get("properties") or {}
+            _up0 = {str(k).upper(): v for k, v in pr0.items()}
+            _approx = False; _note = ""
+            # source contains malformed records (points in Mali, Latvia, Indonesia...).
+            # Canada has no overseas territory, so re-place them at the province /
+            # national centroid and mark them approximate instead of deleting them.
+            if not _box_ok("iaac_ca", ll[0], ll[1]):
+                fb = _fallback_center("iaac_ca", _up0.get("PROVINCE") or _up0.get("REGION") or "")
+                if not fb:
+                    dropped += 1; continue
+                ll = (fb[0], fb[1]); _approx = True; dropped += 1
+                _note = (" Source coordinates were unusable \u2014 shown at the "
+                         + ("province" if fb[2] != "national" else "national")
+                         + " level; open the registry for the exact site.")
             pr = f.get("properties") or {}
             up = {str(k).upper(): v for k, v in pr.items()}
-            nm = (up.get("NAME") or up.get("PROJECT_NAME") or up.get("TITLE")
-                  or up.get("PROJECT") or "Impact assessment")
+            if not out and not _CA_KEYS_SHOWN:
+                print("  iaac ca [fields]: %s" % sorted(list(pr.keys()))[:18])
+                _CA_KEYS_SHOWN.append(1)
+            nm = _best_name(pr, ("PROJECT_NAME", "PROJECTNAME", "NAME_EN", "NAME",
+                                 "TITLE_EN", "TITLE", "PROJECT", "ASSESSMENT_NAME",
+                                 "PROJECT_TITLE", "ENGLISH_NAME", "LABEL", "NOM"))
+            if not nm:
+                nm = "Impact assessment"
             status = str(up.get("STATUS") or up.get("PHASE") or up.get("STAGE") or "")
             p = {"name": str(nm)[:140], "type": "Impact assessment (Canada)",
                  "state": str(up.get("PROVINCE") or up.get("REGION") or "Canada"),
-                 "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": True,
+                 "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": not _approx,
                  "size": "", "status": status, "company": str(up.get("PROPONENT") or "")[:80],
                  "url": "https://iaac-aeic.gc.ca/050/evaluations",
                  "desc": ("Canadian federal impact assessment" +
                           ((" \u00b7 " + status) if status else "") +
-                          ". From the Impact Assessment Registry."),
+                          ". From the Impact Assessment Registry." + _note),
                  "source": "iaac_ca"}
             p["impact"] = rate_project(p, sensitivity=1)
             out.append(p)
         except Exception:
             continue
-    print("  iaac ca: %d assessments" % len(out))
+    print("  iaac ca: %d assessments (%d re-placed at province/national level:"
+          " source coords outside Canada)" % (len(out), dropped))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# OpenStreetMap (Overpass) -- things PHYSICALLY UNDER CONSTRUCTION worldwide.
+# Free, no key, ODbL (attribution required, baked into each desc). Pure builds:
+# construction landuse, roads/rail being built, and works-in-progress sites.
+# Queried per region bbox with a hard per-bbox cap so it can't flood the map.
+# ---------------------------------------------------------------------------
+_OSM_BOXES = [
+    # (south, west, north, east, label)
+    (24.0, -125.0, 49.5, -66.0, "United States"), (49.0, -141.0, 70.0, -52.0, "Canada"),
+    (14.0, -118.0, 33.0, -86.0, "Mexico & Central America"),
+    (-56.0, -82.0, 13.0, -34.0, "South America"),
+    (36.0, -10.0, 60.0, 30.0, "Europe"), (50.0, 20.0, 70.0, 60.0, "Eastern Europe"),
+    (-35.0, -18.0, 15.0, 52.0, "Africa"), (15.0, 25.0, 42.0, 63.0, "Middle East"),
+    (5.0, 60.0, 37.0, 92.0, "South Asia"), (18.0, 92.0, 54.0, 135.0, "East Asia"),
+    (-11.0, 95.0, 22.0, 141.0, "Southeast Asia"),
+    (-44.0, 112.0, -10.0, 154.0, "Australia"), (-48.0, 166.0, -34.0, 179.0, "New Zealand"),
+]
+def fetch_osm_construction(cap=250):
+    ep = "https://overpass-api.de/api/interpreter"
+    out = []; ok_boxes = 0
+    for (s, w, n, e, label) in _OSM_BOXES:
+        bb = "%s,%s,%s,%s" % (s, w, n, e)
+        q = ('[out:json][timeout:90];('
+             'way["landuse"="construction"](%s);'
+             'way["highway"="construction"](%s);'
+             'way["railway"="construction"](%s);'
+             'way["building"="construction"](%s);'
+             ');out center %d;' % (bb, bb, bb, bb, cap))
+        try:
+            req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
+                                         headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+        except Exception as ex:
+            print("  osm %s failed: %s" % (label, ex)); continue
+        ok_boxes += 1
+        for el in (data.get("elements") or []):
+            try:
+                c = el.get("center") or {}
+                lat = c.get("lat", el.get("lat")); lng = c.get("lon", el.get("lon"))
+                if lat is None or lng is None: continue
+                tg = el.get("tags") or {}
+                nm = (tg.get("name") or tg.get("construction:name") or
+                      tg.get("operator") or "")
+                kind = ("Road under construction" if tg.get("highway") else
+                        "Railway under construction" if tg.get("railway") else
+                        "Building under construction" if tg.get("building") else
+                        "Construction site")
+                p = {"name": (nm or kind)[:140], "type": kind, "state": label,
+                     "lat": round(float(lat), 5), "lng": round(float(lng), 5),
+                     "precise": True, "size": "", "status": "Under construction",
+                     "company": tg.get("operator") or "",
+                     "url": "https://www.openstreetmap.org/way/" + str(el.get("id") or ""),
+                     "desc": (kind + " mapped in OpenStreetMap" +
+                              ((" \u00b7 " + nm) if nm else "") +
+                              ". Source: OpenStreetMap contributors (ODbL)."),
+                     "source": "osm_construction"}
+                p["impact"] = rate_project(p, sensitivity=0)
+                out.append(p)
+            except Exception:
+                continue
+        time.sleep(2.0)   # Overpass fair-use pacing
+    print("  osm construction: %d sites from %d/%d regions" % (len(out), ok_boxes, len(_OSM_BOXES)))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Brazil -- IBAMA federal environmental licences (CKAN open data, free, no key).
+# Licenca Previa / Instalacao / Operacao = the approvals mines, dams, pipelines
+# and highways need. Placed from coordinates when published, else at the state
+# centroid (flagged approximate). dadosabertos.ibama.gov.br
+# ---------------------------------------------------------------------------
+_BR_UF = {
+    "AC": (-9.0, -70.0), "AL": (-9.6, -36.8), "AP": (1.4, -51.8), "AM": (-4.1, -63.0),
+    "BA": (-12.5, -41.7), "CE": (-5.2, -39.3), "DF": (-15.8, -47.8), "ES": (-19.6, -40.3),
+    "GO": (-16.0, -49.6), "MA": (-5.0, -45.3), "MT": (-13.0, -55.9), "MS": (-20.5, -54.6),
+    "MG": (-18.6, -44.6), "PA": (-4.0, -53.0), "PB": (-7.2, -36.7), "PR": (-24.6, -51.6),
+    "PE": (-8.4, -37.9), "PI": (-7.4, -42.7), "RJ": (-22.3, -42.7), "RN": (-5.8, -36.6),
+    "RS": (-30.0, -53.5), "RO": (-10.9, -63.0), "RR": (2.1, -61.4), "SC": (-27.2, -50.5),
+    "SP": (-22.2, -48.7), "SE": (-10.6, -37.4), "TO": (-10.2, -48.3),
+}
+_BR_BUILD_LIC = ("previa", "prévia", "instala", "opera", "supress", "sismic", "sísmic")
+
+def _sniff_col(cols, *pats):
+    for pat in pats:
+        for c in cols:
+            if pat in str(c).lower(): return c
+    return None
+
+def fetch_ibama_br(max_rows=4000):
+    base = "https://dadosabertos.ibama.gov.br/api/3/action/package_show?id="
+    ds = "licencas-ambientais-de-atividades-e-empreendimentos-licenciados-pelo-ibama"
+    try:
+        meta = _get_json(base + ds)
+    except Exception as e:
+        print("  ibama br: package lookup failed: %s" % e); return []
+    res = ((meta or {}).get("result") or {}).get("resources") or []
+    csvs = [r for r in res if str(r.get("format", "")).upper() in ("CSV", "TXT")
+            and r.get("url")]
+    if not csvs:
+        print("  ibama br: no CSV resource found (%d resources)" % len(res)); return []
+    url = csvs[0]["url"]
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=180) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except Exception as e:
+        print("  ibama br: csv download failed: %s" % e); return []
+    import csv as _csv, io as _io
+    delim = ";" if raw[:2000].count(";") > raw[:2000].count(",") else ","
+    rdr = _csv.DictReader(_io.StringIO(raw), delimiter=delim)
+    cols = rdr.fieldnames or []
+    print("  ibama br [fields]: %s" % cols[:14])
+    c_lat = _sniff_col(cols, "latitude", "lat")
+    c_lng = _sniff_col(cols, "longitude", "long", "lng")
+    c_nm  = _sniff_col(cols, "empreendimento", "nome", "denomina", "atividade")
+    c_uf  = _sniff_col(cols, "uf", "estado", "sigla_uf")
+    c_lic = _sniff_col(cols, "tipolicenca", "tipo_licenca", "licenca")
+    c_mun = _sniff_col(cols, "municipio", "municipality")
+    out = []; n = 0; approx = 0
+    for row in rdr:
+        if n >= max_rows: break
+        try:
+            lic = str(row.get(c_lic) or "").lower() if c_lic else ""
+            if lic and not any(k in lic for k in _BR_BUILD_LIC):
+                continue
+            lat = _num(row.get(c_lat)) if c_lat else None
+            lng = _num(row.get(c_lng)) if c_lng else None
+            precise = True
+            if lat is None or lng is None or not (-34 < (lat or 99) < 6 and -74 < (lng or 99) < -34):
+                uf = str(row.get(c_uf) or "").strip().upper()[:2]
+                if uf not in _BR_UF: continue
+                lat, lng = _BR_UF[uf]; precise = False; approx += 1
+            n += 1
+            nm = (str(row.get(c_nm) or "").strip() or "Licenciamento ambiental")[:140]
+            mun = str(row.get(c_mun) or "").strip()
+            p = {"name": nm, "type": "Environmental licence (Brazil)",
+                 "state": (mun + ", " if mun else "") + str(row.get(c_uf) or "Brazil"),
+                 "lat": round(float(lat), 5), "lng": round(float(lng), 5),
+                 "precise": precise, "size": "",
+                 "status": str(row.get(c_lic) or "")[:60], "company": "",
+                 "url": "https://dadosabertos.ibama.gov.br/dataset/" + ds,
+                 "desc": ("Brazilian federal environmental licence (IBAMA)" +
+                          ((" \u00b7 " + str(row.get(c_lic))) if c_lic and row.get(c_lic) else "") +
+                          ("." if precise else ". State-level placement \u2014 no coordinates published.")),
+                 "source": "ibama_br"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  ibama br: %d licences (%d placed at state level)" % (len(out), approx))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# France -- Sitadel: the national building/development permit database (SDES,
+# Ministry of Ecological Transition). Etalab 2.0 open licence, fully automated:
+# the monthly CSV is fetched from data.gouv.fr each run. Sitadel has no
+# coordinates, so permits are placed on their COMMUNE centroid (communes are
+# small, ~15 km2 on average) via geo.api.gouv.fr -- one request for all ~35k.
+# ---------------------------------------------------------------------------
+def _fr_communes():
+    try:
+        rows = _get_json("https://geo.api.gouv.fr/communes?fields=code,nom,centre&format=json")
+    except Exception as e:
+        print("  france: commune centroids failed: %s" % e); return {}
+    out = {}
+    for c in (rows or []):
+        try:
+            ctr = (c.get("centre") or {}).get("coordinates") or []
+            if len(ctr) >= 2:
+                out[str(c.get("code"))] = (float(ctr[1]), float(ctr[0]), c.get("nom") or "")
+        except Exception:
+            continue
+    return out
+
+def fetch_sitadel_fr(max_rows=3000, months=6):
+    com = _fr_communes()
+    if not com:
+        print("  sitadel fr: no commune centroids (skip)"); return []
+    print("  sitadel fr: %d commune centroids loaded" % len(com))
+    slug = "liste-des-permis-de-construire-et-autres-autorisations-durbanisme"
+    try:
+        meta = _get_json("https://www.data.gouv.fr/api/1/datasets/%s/" % slug)
+    except Exception as e:
+        print("  sitadel fr: dataset lookup failed: %s" % e); return []
+    res = (meta or {}).get("resources") or []
+    cands = [r for r in res if str(r.get("format", "")).lower() in ("csv", "zip", "txt")
+             and r.get("url")]
+    # prefer a resource whose title mentions non-residential ("locaux") or permits
+    pick = None
+    for r in cands:
+        t = (str(r.get("title") or "") + " " + str(r.get("url") or "")).lower()
+        if "local" in t or "non_resid" in t or "locaux" in t:
+            pick = r; break
+    pick = pick or (cands[0] if cands else None)
+    if not pick:
+        print("  sitadel fr: no CSV resource (%d resources)" % len(res)); return []
+    print("  sitadel fr: using resource '%s'" % str(pick.get("title"))[:70])
+    try:
+        req = urllib.request.Request(pick["url"], headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=240) as r:
+            blob = r.read()
+    except Exception as e:
+        print("  sitadel fr: download failed: %s" % e); return []
+    # unzip if needed
+    text = None
+    if blob[:2] == b"PK":
+        try:
+            import zipfile, io as _io2
+            zf = zipfile.ZipFile(_io2.BytesIO(blob))
+            names = [n for n in zf.namelist() if n.lower().endswith((".csv", ".txt"))]
+            if not names:
+                print("  sitadel fr: zip has no csv"); return []
+            text = zf.read(names[0]).decode("utf-8", "replace")
+        except Exception as e:
+            print("  sitadel fr: unzip failed: %s" % e); return []
+    else:
+        text = blob.decode("utf-8", "replace")
+    import csv as _csv, io as _io
+    delim = ";" if text[:3000].count(";") > text[:3000].count(",") else ","
+    rdr = _csv.DictReader(_io.StringIO(text), delimiter=delim)
+    cols = rdr.fieldnames or []
+    print("  sitadel fr [fields]: %s" % cols[:14])
+    c_com = _sniff_col(cols, "comm", "code_commune", "insee")
+    c_dat = _sniff_col(cols, "date_reelle_autorisation", "date_autoris", "date")
+    c_nat = _sniff_col(cols, "nature_projet", "nature", "type_dau", "destination")
+    c_srf = _sniff_col(cols, "surf_loc_creee", "surface", "surf")
+    if not c_com:
+        print("  sitadel fr: no commune column found"); return []
+    cutoff = (datetime.date.today() - datetime.timedelta(days=months * 31)).isoformat()
+    out = []
+    for row in rdr:
+        if len(out) >= max_rows: break
+        try:
+            code = str(row.get(c_com) or "").strip().zfill(5)
+            hit = com.get(code)
+            if not hit: continue
+            if c_dat:
+                dv = str(row.get(c_dat) or "")[:10]
+                if len(dv) == 10 and dv < cutoff: continue
+            srf = _num(row.get(c_srf)) if c_srf else None
+            if srf is not None and srf < 500:      # keep significant builds only
+                continue
+            lat, lng, cname = hit
+            nat = str(row.get(c_nat) or "").strip()
+            nm = ((nat + " \u2014 " if nat else "") + cname)[:140] or "Permis de construire"
+            p = {"name": nm, "type": "Development permit (France)",
+                 "state": cname, "lat": round(lat, 5), "lng": round(lng, 5),
+                 "precise": False,
+                 "size": ("%d m\u00b2" % int(srf)) if srf else "",
+                 "status": "Permit granted", "company": "",
+                 "url": "https://www.data.gouv.fr/datasets/" + slug,
+                 "desc": ("French development permit (Sitadel, SDES)" +
+                          ((" \u00b7 " + nat) if nat else "") +
+                          ". Placed at the commune centroid (" + cname + ")."),
+                 "source": "sitadel_fr"}
+            p["impact"] = rate_project(p, sensitivity=0)
+            out.append(p)
+        except Exception:
+            continue
+    print("  sitadel fr: %d permits" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# India -- environmental / forest clearances (PARIVESH) via data.gov.in.
+# Free API, needs a free key: register at data.gov.in, then add the key as the
+# GitHub secret DATA_GOV_IN_KEY. Resource IDs are discovered from the catalog,
+# or set INDIA_RESOURCE_IDS (comma-separated) to pin them. Records carry no
+# coordinates, so each is placed at its STATE centroid (flagged approximate).
+# ---------------------------------------------------------------------------
+_IN_STATE = {
+    "ANDHRA PRADESH": (15.9, 79.7), "ARUNACHAL PRADESH": (28.2, 94.7), "ASSAM": (26.2, 92.9),
+    "BIHAR": (25.1, 85.3), "CHHATTISGARH": (21.3, 81.8), "GOA": (15.3, 74.1),
+    "GUJARAT": (22.3, 71.2), "HARYANA": (29.1, 76.1), "HIMACHAL PRADESH": (31.1, 77.2),
+    "JHARKHAND": (23.6, 85.3), "KARNATAKA": (15.3, 75.7), "KERALA": (10.9, 76.3),
+    "MADHYA PRADESH": (23.5, 78.7), "MAHARASHTRA": (19.7, 75.7), "MANIPUR": (24.7, 93.9),
+    "MEGHALAYA": (25.5, 91.4), "MIZORAM": (23.2, 92.9), "NAGALAND": (26.2, 94.6),
+    "ODISHA": (20.9, 85.1), "ORISSA": (20.9, 85.1), "PUNJAB": (31.1, 75.3),
+    "RAJASTHAN": (27.0, 74.2), "SIKKIM": (27.5, 88.5), "TAMIL NADU": (11.1, 78.7),
+    "TELANGANA": (18.1, 79.0), "TRIPURA": (23.9, 91.7), "UTTAR PRADESH": (26.8, 80.9),
+    "UTTARAKHAND": (30.1, 79.3), "WEST BENGAL": (22.9, 87.9), "DELHI": (28.6, 77.2),
+    "JAMMU AND KASHMIR": (33.8, 76.6), "LADAKH": (34.2, 77.6), "PUDUCHERRY": (11.9, 79.8),
+    "CHANDIGARH": (30.7, 76.8), "ANDAMAN AND NICOBAR ISLANDS": (11.7, 92.7),
+    "LAKSHADWEEP": (10.6, 72.6), "DADRA AND NAGAR HAVELI": (20.4, 72.8),
+}
+def _in_state_center(txt):
+    t = str(txt or "").strip().upper()
+    if not t: return None
+    if t in _IN_STATE: return _IN_STATE[t]
+    for k in sorted(_IN_STATE, key=len, reverse=True):
+        if k in t: return _IN_STATE[k]
+    return None
+
+# DORMANT: data.gov.in publishes no API for the PARIVESH clearance resources
+# ("The API for this resource does not exist") and only aggregate state counts,
+# not individual projects. Kept for the day an API appears; not called.
+def fetch_parivesh_in(per=1000, max_rows=3000):
+    key = os.environ.get("DATA_GOV_IN_KEY")
+    if not key:
+        print("  parivesh in: no DATA_GOV_IN_KEY secret set (skip)"); return []
+    ids = [s.strip() for s in (os.environ.get("INDIA_RESOURCE_IDS") or "").split(",") if s.strip()]
+    if not ids:
+        # discover clearance resources from the catalog
+        try:
+            cat = _get_json("https://api.data.gov.in/catalog?" + urllib.parse.urlencode({
+                "api-key": key, "format": "json", "limit": 100,
+                "filters[title]": "Environmental Clearance"}))
+            recs = (cat or {}).get("records") or (cat or {}).get("data") or []
+            for r in recs:
+                rid = r.get("index_name") or r.get("resource_id") or r.get("id")
+                if rid: ids.append(str(rid))
+        except Exception as e:
+            print("  parivesh in: catalog discovery failed: %s" % e)
+    if not ids:
+        print("  parivesh in: no resource ids found -- set INDIA_RESOURCE_IDS secret"); return []
+    print("  parivesh in: %d resource(s): %s" % (len(ids), ids[:3]))
+    out = []
+    for rid in ids[:6]:
+        try:
+            data = _get_json("https://api.data.gov.in/resource/%s?" % rid + urllib.parse.urlencode({
+                "api-key": key, "format": "json", "offset": 0, "limit": per}))
+        except Exception as e:
+            print("  parivesh in %s: %s" % (rid[:8], e)); continue
+        recs = (data or {}).get("records") or []
+        if recs and not out:
+            print("  parivesh in [fields]: %s" % list(recs[0].keys())[:14])
+        for r in recs:
+            if len(out) >= max_rows: break
+            try:
+                low = {str(k).lower(): v for k, v in r.items()}
+                st = None
+                for kk in ("state", "state_name", "state_ut", "location"):
+                    if low.get(kk): st = low[kk]; break
+                ctr = _in_state_center(st)
+                if not ctr: continue
+                nm = None
+                for kk in ("project_name", "name_of_project", "proposal_name", "project", "name"):
+                    if low.get(kk): nm = str(low[kk]); break
+                if not nm: continue
+                cat_v = ""
+                for kk in ("category", "sector", "project_type", "type"):
+                    if low.get(kk): cat_v = str(low[kk]); break
+                p = {"name": nm[:140], "type": (cat_v or "Environmental clearance (India)"),
+                     "state": str(st), "lat": round(ctr[0], 5), "lng": round(ctr[1], 5),
+                     "precise": False, "size": "", "status": "Clearance granted", "company": "",
+                     "url": "https://parivesh.nic.in/",
+                     "desc": ("Indian environmental/forest clearance (PARIVESH)" +
+                              ((" \u00b7 " + cat_v) if cat_v else "") +
+                              ". State-level placement \u2014 no coordinates published."),
+                     "source": "parivesh_in"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        time.sleep(0.5)
+    print("  parivesh in: %d clearances" % len(out))
     return out
 
 def main():
@@ -1174,13 +1781,14 @@ def main():
                                               for p in fetch_socrata(cfg)])
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
     items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
+    items += _run("sitadel_fr", fetch_sitadel_fr)               # France national permits (automated)
     items += _run("uk_planit", fetch_ukplanit)                  # UK national planning applications
     items += _run("epbc_au", fetch_epbc_au)                     # Australia national environmental referrals
     items += _run("iaac_ca", fetch_iaac_ca)                     # Canada federal impact assessments
+    items += _run("ibama_br", fetch_ibama_br)                   # Brazil federal environmental licences
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
-    items += _run("gem", fetch_gem)                             # GLOBAL: new energy projects (local files)
-    items += _run("ejatlas", fetch_ejatlas)                     # global EJ conflicts (local export)
+    items += _run("osm_construction", fetch_osm_construction)  # GLOBAL: sites under construction
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
     items.sort(key=lambda p: -(p.get("impact") or 0))
