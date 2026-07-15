@@ -5,7 +5,7 @@
   "link": "https://unicornriot.ninja/2026/nyc-activists-maintain-boycott-against-blood-money-rave-boiler-room/",
   "date": 1783985286000,
   "sig": 5,
-  "snippet": "The fight for nightlife goes on as Boycott Room, a group of DJs, organizers and activists that have been calling for a coordinated boycott of the event series and video platform Boiler Room took another stand with a protest and counter-rave on July 10 and…\nThe post NYC Activists "
+  "snippet": "The fight for nightlife goes on as Boycott Room, a group of DJs, organizers and activists that have been calling for a coordinated boycott of the event series and video platform Boiler Room took another stand with protests and a counter-rave on July 10 and…\nThe post NYC Activists"
  },
  {
   "name": "Unicorn Riot",
@@ -280,6 +280,14 @@
   "snippet": "Mountain Valley urges continued review of Swann compressor  The Black Chronicle"
  },
  {
+  "name": "Front: Mountain Valley Pipeline",
+  "title": "Mountain Valley urges continued review of Swann compressor - AOL.com",
+  "link": "https://news.google.com/rss/articles/CBMiigFBVV95cUxNTnV0SmhRWFdCeUVzV3JvOXRsd1BjT0RPZjlXU1M4STE1ekgxemlZQ1E2UW1oamp1YTVjMmVETkFtRGpIVkFTYzF1WGlJWHhBR0RLdldwVHBPYm5icHhpS0RFUkFKRm9Ca0JMZU4yeXNQdWh2T1lXSVVZMTJGSlJSOG9JQ3BYakxmNUE?oc=5",
+  "date": 1784069530000,
+  "sig": 3,
+  "snippet": "Mountain Valley urges continued review of Swann compressor  AOL.com"
+ },
+ {
   "name": "Front: Thacker Pass lithium",
   "title": "Process Plant Training Returns for Fort McDermitt and Duck Valley Tribe Members - Lithium Americas",
   "link": "https://news.google.com/rss/articles/CBMi3AFBVV95cUxOWVZONi1qNGpfdGdpR1VkeGZyQTllQ2VjeEU5Q2d6QTZfbFVOYndHdzdQTm54X3Fqa0x3SldOTkR2WExVRkNHeGVLN1J6VWkxTlhBZUs4ZzZfejJJS3NQVkFFdklmMUZKVUZBMjd3ZjRub0doU2tQaXcwa1hyUFJQdW1NSVc1OVE2dVloOUJPbzM4RGNmVmJydnVLRmFaZVdjSHNVMHZBYnpDLTM3Z1hVNUhiNUlQVG9iNjl1ektha2h5TW5YMXotaGYtRnJFRTI5RHFNWUdXWHZnRlBY?oc=5",
@@ -361,19 +369,19 @@
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
-  "title": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment - Bloomberg.com",
-  "link": "https://news.google.com/rss/articles/CBMitgFBVV95cUxPb3pLN05oN3dBTXVOME1oNVk2dGdrYXUtejRGaXREcERBQTJuSk9ULUdSTUxBdmt1azlSYS03YjdfY0RzN19PZ0VCVUNENXNHUFBRUmVGalY2SFd0MVFOQl96M2owVF9MUU1MM1pDWHZ1UnlrekFBZVhOS1NIVEpMdG1WOUZ3WkJGOXZGakh3R2pNeWF2ZWtpYl9lajhVTTNsMjEtY184WTAzUHZXcmZDVk5KeEs3dw?oc=5",
-  "date": 1783497891000,
-  "sig": 3,
-  "snippet": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment  Bloomberg.com"
- },
- {
-  "name": "Front: LNG terminal Gulf Coast",
   "title": "Energia Costa Azul LNG First Shipment: New Competitor for Asian Markets - News and Statistics - IndexBox",
   "link": "https://news.google.com/rss/articles/CBMipAFBVV95cUxNbUJpbFpkRFVOVHdGdVdkaEpvb0RDcGN2VGhQVGxsNHdaeE92cGNLOW1qUlhfcFZCdEpWRnRnUzV3VnZkdkpZT0ViVUl2V2RDdTNrOEtKUW05OXhBSnV2dDJad0dmaUFWMUhMbzNWOHYySERtVlp3WndXd1hkSGFXNzdnMUJCS1R3Zl9ySlJpN3E5bEJ4LXQzMG9yVEpxclRDNi11NQ?oc=5",
   "date": 1783633800000,
   "sig": 3,
   "snippet": "Energia Costa Azul LNG First Shipment: New Competitor for Asian Markets - News and Statistics  IndexBox"
+ },
+ {
+  "name": "Front: LNG terminal Gulf Coast",
+  "title": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment - Bloomberg.com",
+  "link": "https://news.google.com/rss/articles/CBMitgFBVV95cUxPb3pLN05oN3dBTXVOME1oNVk2dGdrYXUtejRGaXREcERBQTJuSk9ULUdSTUxBdmt1azlSYS03YjdfY0RzN19PZ0VCVUNENXNHUFBRUmVGalY2SFd0MVFOQl96M2owVF9MUU1MM1pDWHZ1UnlrekFBZVhOS1NIVEpMdG1WOUZ3WkJGOXZGakh3R2pNeWF2ZWtpYl9lajhVTTNsMjEtY184WTAzUHZXcmZDVk5KeEs3dw?oc=5",
+  "date": 1783497891000,
+  "sig": 3,
+  "snippet": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment  Bloomberg.com"
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
@@ -465,18 +473,10 @@
  },
  {
   "name": "Front: Mountain Valley Pipeline",
-  "title": "FERC Gives OK for MVP Southgate Construction to Begin in N.C. - Marcellus Drilling News",
-  "link": "https://news.google.com/rss/articles/CBMioAFBVV95cUxOWXFIeWxIbXRIM0gzdXh2LXN1Nk41N2xQeURBYVp1VndYRTBMNmNCN3VDbnRGQWU5alk2TmJpQVhGZGVaSzdTSHR5MUNTWXFQZWszYV9kT0JxYlhaSGlWRWhZeHFRZ3pNYVItZmc4MnpiRDdRTFJ3bmdaTFY1VUpIZVU0eXc0b25CY2R3QlJHSXVqUlI5dVNGam4wM2IzbGVG?oc=5",
-  "date": 1782370800000,
+  "title": "Pipeline opponents: A compressor station doesn't fit rural character of eastern Montgomery County - Cardinal News",
+  "link": "https://news.google.com/rss/articles/CBMizAFBVV95cUxPOEZRRE1pd2ZQbkQ2N0lWTTZ3OTAtdGZOMUJDMWJkd2FoaFZYVlYwdE83eVRsOXF2WXFtZVJXQnhuaHJwaGpNd2xuOEpoRUViTl9ZR2RTRW9zZ0VZNFlncFgzazY0ejV3UV9rSGZRUmF6TDZoRVFDbDR4dXZUVEFTVnBqUDE5cFFCYzNJWUtjc2JJcnBQOTFxQUFxT2xVVFJpaDY5NFpaamhMZVYtY2FrTGwyNXkyT2l3M2pXd1VqMmtLSjFzRUstV2dPbm0?oc=5",
+  "date": 1780556400000,
   "sig": 3,
-  "snippet": "FERC Gives OK for MVP Southgate Construction to Begin in N.C.  Marcellus Drilling News"
- },
- {
-  "name": "Front: Mountain Valley Pipeline",
-  "title": "DEQ suspends MVP compressor station permit - WVTF",
-  "link": "https://news.google.com/rss/articles/CBMihgFBVV95cUxNMXlVeEpBVzExQTEyUm43cnhKZzE5UV9aZFMzWWdVOUFLVVNyUlpobGM0NHBwUzBWdWRMZzdHWGVWUzlzSDZ5N0tDNDFGN2dHTVZDcnJXVHFWOVJlZGpwajNnb0FOOG9kRm5TTEZ6bkNodG5fdU9ZcFJCZXFjSGxiOHVKMDFBdw?oc=5",
-  "date": 1783062000000,
-  "sig": 3,
-  "snippet": "DEQ suspends MVP compressor station permit  WVTF"
+  "snippet": "Pipeline opponents: A compressor station doesn't fit rural character of eastern Montgomery County  Cardinal News"
  }
 ]
