@@ -297,11 +297,11 @@
  },
  {
   "name": "Front: pipeline blockade",
-  "title": "The president is reinstating a blockade in the Strait of Hormuz. What does that mean for Alaska? - Alaska's News Source",
-  "link": "https://news.google.com/rss/articles/CBMixwFBVV95cUxPMTBxeV9QRjdJY202NGVTREdnZmFkY2NBRWJtRWV6RmtZYUlobmNJY0lMaVg1VG16WDZVcFRZTUZLVHV0VE4tanRvbEFVVlFVU1EzVUcyZHBaQnUyYkpodmV6MFpwTlF1cG40a2M4RDZjQnZqOTZfM2lxMl9QOXh3ZUdUS3pEenpHZi04QUpiSDQ0RFVpZkU5YjJhOU50eDF0TmtuRVo3MVVsUVY1SXNISVlGNlNCRFBPalVZcG05OWwtRUo2UlZj?oc=5",
-  "date": 1783996620000,
+  "title": "The president is reinstating a blockade in the Strait of Hormuz. What does that mean for Alaska? - KTVF Fairbanks",
+  "link": "https://news.google.com/rss/articles/CBMixgFBVV95cUxOMjFVNUdaWWZjSFB4bUZkMktxTng5Vm9ZMFdCRzR1dmVsZFFvR3JKZDNGVTR0MmFEVjUxS3hkN2lLWkpvNDVaTHI5dHpRcFVUMmVKaGlkQ1ZGcmRReEwwNXNhMmFIUGRIaFhtM2d5VUJwVnlEamlZYm5sWEpBVURiM0lQQkdKUlgyaU1nMXIyRm0wYjBnNU1BYmM1djd5RzlLVXpzbnV1YjBEX3ZmdU5sbC0zNVZ6QVhCS1JEaXhrOVdxeXpneFE?oc=5",
+  "date": 1783992000000,
   "sig": 3,
-  "snippet": "The president is reinstating a blockade in the Strait of Hormuz. What does that mean for Alaska?  Alaska's News Source"
+  "snippet": "The president is reinstating a blockade in the Strait of Hormuz. What does that mean for Alaska?  KTVF Fairbanks"
  },
  {
   "name": "Front: pipeline blockade",
@@ -353,14 +353,6 @@
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
-  "title": "Gulf Coast LNG Brownfield Expansions Gather Momentum - Hart Energy",
-  "link": "https://news.google.com/rss/articles/CBMijwFBVV95cUxQUWhZY3E3cFc5MUZXOU1kd1l4QllMRlhQdVVoZU5zZjdiLVRCQVZfbDh0MGFsX2xfUmcwMFlfaVBVckY0ZVNoYkZULVhhSXQwZkpWOGhyYXN1bVFtdHQwRDg3NU5xXzRzRUZPRU5DTmROTE51LW1qMDU4R3ZFSHpNM3YwSmV3RTI1OWxFU1hMRQ?oc=5",
-  "date": 1783713600000,
-  "sig": 3,
-  "snippet": "Gulf Coast LNG Brownfield Expansions Gather Momentum  Hart Energy"
- },
- {
-  "name": "Front: LNG terminal Gulf Coast",
   "title": "Sempra’s West Coast Mexican LNG Terminal Ships First Cargo - The Maritime Executive",
   "link": "https://news.google.com/rss/articles/CBMingFBVV95cUxOTjVLWXJ4MF9CY1BqYnJUSlNIX2VIQW5mQjVRMWdTMU1GbDM3MWVjNi00YVdodjAtZkUzNHJ1b2VyRXMwTXlBb1pBd2h5anhiTjVvNlJpS2tPYWJOMjA2bEx6dUhWWkV3dGlHN3NWY3h2LTJFclNCOHlsVG9IMWRxMWVDRG9YVUZTRGdoeDd5MjlNdEF5TDhmOUIzVHlJQQ?oc=5",
   "date": 1783631464000,
@@ -369,11 +361,19 @@
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
-  "title": "Mexican west coast LNG terminal ships first cargoes - Lloyd's List",
-  "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxQSEtubW45RFhWNkJtbGJuNEh4NVJkOXE0RWlFcXhuNkRMcXZfSFJUZHRrUXU0bmhoc083LUdCREN0MnA2Z3VrTXpYVjZyTGswdXE3anp4aUUwOGItLVRZcmNjTllCR2NqZWNhcXJLTEQ2aG93VjR2OEF1RlpmU2w0ang5Rlp5UnEtd2tEMUpQMm9KZw?oc=5",
-  "date": 1783680541000,
+  "title": "Sempra’s Baja LNG Launch Gives North America New Gateway to Asia - Hart Energy",
+  "link": "https://news.google.com/rss/articles/CBMijAFBVV95cUxQWURXeUxYNEJWeF9tbUFNaE5TWEE4UU9SSXpoellFN0ZFYTROR2w1bmpQUVU3OVQ0Q19SYUhkb0puUGlLUXdkcG54ZEpQcUF1SUZReFlvcUJNM3oyUExtTkxPXzdLSFN5c012d2FxQno4YV9YNGNDenFxOEZPdmtmY29XczBWckRaWE9keg?oc=5",
+  "date": 1783627980000,
   "sig": 3,
-  "snippet": "Mexican west coast LNG terminal ships first cargoes  Lloyd's List"
+  "snippet": "Sempra’s Baja LNG Launch Gives North America New Gateway to Asia  Hart Energy"
+ },
+ {
+  "name": "Front: LNG terminal Gulf Coast",
+  "title": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment - Bloomberg.com",
+  "link": "https://news.google.com/rss/articles/CBMitgFBVV95cUxPb3pLN05oN3dBTXVOME1oNVk2dGdrYXUtejRGaXREcERBQTJuSk9ULUdSTUxBdmt1azlSYS03YjdfY0RzN19PZ0VCVUNENXNHUFBRUmVGalY2SFd0MVFOQl96M2owVF9MUU1MM1pDWHZ1UnlrekFBZVhOS1NIVEpMdG1WOUZ3WkJGOXZGakh3R2pNeWF2ZWtpYl9lajhVTTNsMjEtY184WTAzUHZXcmZDVk5KeEs3dw?oc=5",
+  "date": 1783497891000,
+  "sig": 3,
+  "snippet": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment  Bloomberg.com"
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
@@ -392,20 +392,12 @@
   "snippet": "Mexico starts first exports from Pacific LNG terminal  Quantum Commodity Intelligence"
  },
  {
-  "name": "Front: LNG terminal Gulf Coast",
-  "title": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment - Bloomberg.com",
-  "link": "https://news.google.com/rss/articles/CBMitgFBVV95cUxPb3pLN05oN3dBTXVOME1oNVk2dGdrYXUtejRGaXREcERBQTJuSk9ULUdSTUxBdmt1azlSYS03YjdfY0RzN19PZ0VCVUNENXNHUFBRUmVGalY2SFd0MVFOQl96M2owVF9MUU1MM1pDWHZ1UnlrekFBZVhOS1NIVEpMdG1WOUZ3WkJGOXZGakh3R2pNeWF2ZWtpYl9lajhVTTNsMjEtY184WTAzUHZXcmZDVk5KeEs3dw?oc=5",
-  "date": 1783497891000,
+  "name": "Front: Line 5 pipeline",
+  "title": "Judge Upholds Wisconsin DNR’s Permit for Line 5 Oil Pipeline - Earthjustice",
+  "link": "https://news.google.com/rss/articles/CBMimwFBVV95cUxOWURoLVJ1bm9IUVJFMW1KeFhlWG5MdF9uR1AwR1J5UXlZY25SQXFpSTk1VWYwSHFjbFo0NlVnTHFfdTlFMVBmSlNfNFdHNkFKLUJPcEctUVdnbWJDQVlPMTF2TDNDekJ5U0ZnOHhidmFUX2ZHU3JCeUc3eXhSakQ1WnRPZkhtMWF6RF9DejZpNVJoejhTeGRyZkZYNA?oc=5",
+  "date": 1770969600000,
   "sig": 3,
-  "snippet": "Sempra’s LNG Plant on Mexico’s West Coast Exports First Shipment  Bloomberg.com"
- },
- {
-  "name": "Front: LNG terminal Gulf Coast",
-  "title": "Sempra’s Baja LNG Launch Gives North America New Gateway to Asia - Hart Energy",
-  "link": "https://news.google.com/rss/articles/CBMijAFBVV95cUxQWURXeUxYNEJWeF9tbUFNaE5TWEE4UU9SSXpoellFN0ZFYTROR2w1bmpQUVU3OVQ0Q19SYUhkb0puUGlLUXdkcG54ZEpQcUF1SUZReFlvcUJNM3oyUExtTkxPXzdLSFN5c012d2FxQno4YV9YNGNDenFxOEZPdmtmY29XczBWckRaWE9keg?oc=5",
-  "date": 1783627980000,
-  "sig": 3,
-  "snippet": "Sempra’s Baja LNG Launch Gives North America New Gateway to Asia  Hart Energy"
+  "snippet": "Judge Upholds Wisconsin DNR’s Permit for Line 5 Oil Pipeline  Earthjustice"
  },
  {
   "name": "Front: Willow project Alaska drilling",
@@ -478,5 +470,13 @@
   "date": 1782284400000,
   "sig": 3,
   "snippet": "FERC approves Mountain Valley Southgate pipeline construction in North Carolina (EQT:NYSE)  Seeking Alpha"
+ },
+ {
+  "name": "Front: Mountain Valley Pipeline",
+  "title": "Mountain Valley Pipeline Permits Remain Intact During Challenge - Bloomberg Law News",
+  "link": "https://news.google.com/rss/articles/CBMitwFBVV95cUxNeUdnaUJQVVhkMl9LR2VIbEVpQmNnaHBxd0pBMEs4cnpicVBvWm9nZUd6a1QySWstM2RHaVp4cTQ5aVhHQ0czOGdBRm5Jcml5R2FUdWFrRHd1dFVTbkoyX0xnSEFMU1NrRk8wSExXZjBQdFF1Q0xrZFpjU0pqT3JVMmh4WnNrQ0JwcEozVE1SenhwV1UyeXZCSk9QcDFyME9rVHFObms2Y0hmZFVxRUlwRHZjOThtc3c?oc=5",
+  "date": 1781161200000,
+  "sig": 3,
+  "snippet": "Mountain Valley Pipeline Permits Remain Intact During Challenge  Bloomberg Law News"
  }
 ]
