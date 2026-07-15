@@ -1121,27 +1121,68 @@ _HUB_VAL_RE = re.compile(r"(valuation|est.?value|job.?value|construction.?cost|"
 _HUB_NAME_RE = re.compile(r"(work.?desc|description|permit.?type|type.?desc|"
                           r"scope|project.?name|proposed.?use|permit.?class)", re.I)
 
-def fetch_arcgis_hub(max_datasets=25, min_value=1000000, per_ds=300):
-    try:
-        surl = "https://opendata.arcgis.com/api/v3/datasets?" + urllib.parse.urlencode({
-            "q": "building permits", "page[size]": "50"})
-        sdata = _get_json(surl)
-    except Exception as e:
-        print("  arcgis hub search failed: %s" % e); return []
-    ds = sdata.get("data", []) if isinstance(sdata, dict) else []
-    ds = [d for d in ds
-          if "permit" in str((d.get("attributes") or {}).get("name", "")).lower()]
-    print("  arcgis hub: %d permit datasets discovered" % len(ds))
+# ArcGIS Hub is a GLOBAL platform: thousands of city/region open-data portals in
+# many countries publish permit layers to it. Searching in several languages is
+# how we compile SUBNATIONAL data into coverage for countries that have no
+# national register (Germany, Spain, Italy, Chile, Japan, Poland...).
+_HUB_QUERIES = [
+    ("building permits", "permit"), ("construction permits", "permit"),
+    ("development applications", "development"), ("planning applications", "planning"),
+    ("building approvals", "approval"), ("permis de construire", "permis"),
+    ("licencia de construccion", "licencia"), ("licencias urbanisticas", "licencia"),
+    ("baugenehmigung", "bau"), ("bouwvergunning", "vergunning"),
+    ("permesso di costruire", "permesso"), ("alvara de construcao", "alvar"),
+    ("pozwolenie na budowe", "pozwolenie"), ("byggetillatelse", "bygge"),
+    ("bygglov", "bygglov"), ("rakennuslupa", "rakennus"),
+    ("development permits", "permit"), ("zoning applications", "zoning"),
+]
+def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
+    ds = []; seen_ds = set()
+    for q, kw in _HUB_QUERIES:
+        for pg in range(1, 4):          # paginate the catalogue, not just page 1
+            try:
+                surl = "https://opendata.arcgis.com/api/v3/datasets?" + urllib.parse.urlencode({
+                    "q": q, "page[size]": "100", "page[number]": pg})
+                sdata = _get_json(surl)
+            except Exception as e:
+                if pg == 1: print("  arcgis hub search '%s' failed: %s" % (q, e))
+                break
+            rows = sdata.get("data", []) if isinstance(sdata, dict) else []
+            if not rows: break
+            for d in rows:
+                nm = str((d.get("attributes") or {}).get("name", "")).lower()
+                did = d.get("id")
+                if did in seen_ds: continue
+                if kw not in nm: continue
+                seen_ds.add(did); ds.append(d)
+            time.sleep(0.25)
+    print("  arcgis hub: %d permit datasets discovered across %d queries"
+          % (len(ds), len(_HUB_QUERIES)))
     out = []; used = 0
     for d in ds[:max_datasets]:
         attrs = d.get("attributes") or {}
         url = attrs.get("url")
         if not url or "/FeatureServer" not in url and "/MapServer" not in url:
             continue
+        # find a valuation field from the layer metadata so we can ask the server
+        # for the BIGGEST projects first instead of an arbitrary slice
+        order = None
         try:
-            q = url.rstrip("/") + "/query?" + urllib.parse.urlencode({
-                "where": "1=1", "outFields": "*", "f": "geojson",
-                "outSR": "4326", "resultRecordCount": per_ds})
+            meta = _get_json(url.rstrip("/") + "?f=json")
+            for fdef in (meta or {}).get("fields", []) or []:
+                fn = str(fdef.get("name") or "")
+                ft = str(fdef.get("type") or "")
+                if _HUB_VAL_RE.search(fn) and ("Double" in ft or "Integer" in ft or "Single" in ft):
+                    order = fn; break
+        except Exception:
+            pass
+        try:
+            params = {"where": "1=1", "outFields": "*", "f": "geojson",
+                      "outSR": "4326", "resultRecordCount": per_ds}
+            if order:
+                params["orderByFields"] = order + " DESC"
+                params["where"] = "%s > %d" % (order, min_value)
+            q = url.rstrip("/") + "/query?" + urllib.parse.urlencode(params)
             gj = _get_json(q)
         except Exception:
             continue
@@ -1449,28 +1490,73 @@ def fetch_iaac_ca():
 # construction landuse, roads/rail being built, and works-in-progress sites.
 # Queried per region bbox with a hard per-bbox cap so it can't flood the map.
 # ---------------------------------------------------------------------------
-_OSM_BOXES = [
-    # (south, west, north, east, label)
-    (24.0, -125.0, 49.5, -66.0, "United States"), (49.0, -141.0, 70.0, -52.0, "Canada"),
-    (14.0, -118.0, 33.0, -86.0, "Mexico & Central America"),
-    (-56.0, -82.0, 13.0, -34.0, "South America"),
-    (36.0, -10.0, 60.0, 30.0, "Europe"), (50.0, 20.0, 70.0, 60.0, "Eastern Europe"),
-    (-35.0, -18.0, 15.0, 52.0, "Africa"), (15.0, 25.0, 42.0, 63.0, "Middle East"),
-    (5.0, 60.0, 37.0, 92.0, "South Asia"), (18.0, 92.0, 54.0, 135.0, "East Asia"),
-    (-11.0, 95.0, 22.0, 141.0, "Southeast Asia"),
-    (-44.0, 112.0, -10.0, 154.0, "Australia"), (-48.0, 166.0, -34.0, 179.0, "New Zealand"),
+# Continent-sized Overpass queries time out and return partial data, so the
+# world is split into small tiles instead. Each run works through a rotating
+# slice of the grid and MERGES with what previous runs already found, so
+# coverage accumulates instead of being capped.
+_OSM_REGIONS = [
+    (24.0, -125.0, 49.5, -66.0), (49.0, -141.0, 60.0, -52.0),
+    (14.0, -118.0, 33.0, -86.0), (-56.0, -82.0, 13.0, -34.0),
+    (36.0, -10.0, 60.0, 30.0), (50.0, 20.0, 70.0, 60.0),
+    (-35.0, -18.0, 15.0, 52.0), (15.0, 25.0, 42.0, 63.0),
+    (5.0, 60.0, 37.0, 92.0), (18.0, 92.0, 54.0, 135.0),
+    (-11.0, 95.0, 22.0, 141.0), (-44.0, 112.0, -10.0, 154.0),
+    (-48.0, 166.0, -34.0, 179.0),
 ]
-def fetch_osm_construction(cap=250):
+def _osm_tiles(step=5.0):
+    """Split the world's populated regions into ~5-degree tiles (~550km)."""
+    out = []
+    for (s, w, n, e) in _OSM_REGIONS:
+        la = s
+        while la < n:
+            lo = w
+            while lo < e:
+                out.append((round(la, 2), round(lo, 2),
+                            round(min(la + step, n), 2), round(min(lo + step, e), 2)))
+                lo += step
+            la += step
+    return out
+
+def _osm_existing():
+    """Keep what earlier runs already harvested so coverage accumulates."""
+    try:
+        ex = json.load(open("projects.json", encoding="utf-8"))
+        rows = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
+        return [q for q in rows if q.get("source") == "osm_construction"]
+    except Exception:
+        return []
+
+def fetch_osm_construction(cap=3000, tiles_per_run=170):
     ep = "https://overpass-api.de/api/interpreter"
-    out = []; ok_boxes = 0
-    for (s, w, n, e, label) in _OSM_BOXES:
+    grid = _osm_tiles()
+    # rotate through the grid so every tile is refreshed over a few days
+    day = datetime.date.today().toordinal()
+    nslice = max(1, tiles_per_run)
+    starti = (day * nslice) % max(1, len(grid))
+    todo = [grid[(starti + i) % len(grid)] for i in range(min(nslice, len(grid)))]
+    print("  osm: grid of %d tiles; this run does %d (rotating)" % (len(grid), len(todo)))
+    out = _osm_existing()
+    print("  osm: carried %d sites forward from previous runs" % len(out))
+    ok_boxes = 0
+    for (s, w, n, e) in todo:
+        label = "%.0f,%.0f" % (s, w)
         bb = "%s,%s,%s,%s" % (s, w, n, e)
-        q = ('[out:json][timeout:90];('
-             'way["landuse"="construction"](%s);'
-             'way["highway"="construction"](%s);'
-             'way["railway"="construction"](%s);'
-             'way["building"="construction"](%s);'
-             ');out center %d;' % (bb, bb, bb, bb, cap))
+        # widened tag set: sites, roads, rail, buildings, plus proposed/under-way
+        # extraction and energy works -- the land-taking projects this map is about.
+        # Overpass can measure features, so instead of an arbitrary cap we keep the
+        # BIG ones: length() on a closed way is its perimeter (400m ~ 1 hectare),
+        # on a road/rail it's the route length.
+        q = ('[out:json][timeout:240];('
+             'way["landuse"="construction"](%s)(if:length()>400);'
+             'way["highway"="construction"](%s)(if:length()>800);'
+             'way["railway"="construction"](%s)(if:length()>800);'
+             'way["building"="construction"](%s)(if:length()>250);'
+             'way["landuse"="quarry"](%s)(if:length()>600);'
+             'way["man_made"="pipeline"]["construction"](%s);'
+             'way["power"="plant"]["construction"](%s);'
+             'way["waterway"="dam"]["construction"](%s);'
+             'relation["landuse"="construction"](%s);'
+             ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
         try:
             req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
                                          headers={"User-Agent": UA})
@@ -1490,6 +1576,10 @@ def fetch_osm_construction(cap=250):
                 kind = ("Road under construction" if tg.get("highway") else
                         "Railway under construction" if tg.get("railway") else
                         "Building under construction" if tg.get("building") else
+                        "Quarry / extraction site" if tg.get("landuse") == "quarry" else
+                        "Pipeline under construction" if tg.get("man_made") == "pipeline" else
+                        "Power plant under construction" if tg.get("power") == "plant" else
+                        "Dam under construction" if tg.get("waterway") == "dam" else
                         "Construction site")
                 p = {"name": (nm or kind)[:140], "type": kind, "state": label,
                      "lat": round(float(lat), 5), "lng": round(float(lng), 5),
@@ -1504,9 +1594,16 @@ def fetch_osm_construction(cap=250):
                 out.append(p)
             except Exception:
                 continue
-        time.sleep(2.0)   # Overpass fair-use pacing
-    print("  osm construction: %d sites from %d/%d regions" % (len(out), ok_boxes, len(_OSM_BOXES)))
-    return out
+        time.sleep(1.2)   # Overpass fair-use pacing
+    # dedup accumulated + new by rounded position
+    seen = set(); merged = []
+    for q in out:
+        k = (round(q.get("lat", 0), 4), round(q.get("lng", 0), 4))
+        if k in seen: continue
+        seen.add(k); merged.append(q)
+    print("  osm construction: %d sites total (%d/%d tiles queried this run)"
+          % (len(merged), ok_boxes, len(todo)))
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -1531,6 +1628,60 @@ def _sniff_col(cols, *pats):
         for c in cols:
             if pat in str(c).lower(): return c
     return None
+
+
+_BR_CENTER = (-14.24, -51.93)
+
+def _ibama_national(csvs, max_rows=1500):
+    """Fallback: IBAMA's licence tables publish no coordinates. Place each licence
+    at Brazil's centroid, spread slightly so they don't stack, flagged approximate."""
+    import csv as _csv, io as _io
+    try:
+        req = urllib.request.Request(csvs[0]["url"], headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=180) as r:
+            raw = r.read().decode("utf-8-sig", "replace")
+    except Exception as e:
+        print("  ibama br: national fallback download failed: %s" % e); return []
+    delim = ";" if raw[:2000].count(";") > raw[:2000].count(",") else ","
+    rdr = _csv.DictReader(_io.StringIO(raw), delimiter=delim)
+    cols = [str(c).lstrip("\ufeff") for c in (rdr.fieldnames or [])]
+    c_nm = _sniff_col(cols, "empreendimento", "nome", "denomina")
+    c_lic = _sniff_col(cols, "tipolicenca", "tipo_licenca", "licenca")
+    c_tip = _sniff_col(cols, "tipologia", "atividade")
+    c_dat = _sniff_col(cols, "emissao", "data")
+    out = []; jit = 0.0
+    for row in rdr:
+        if len(out) >= max_rows: break
+        try:
+            row = {str(k).lstrip("\ufeff"): v for k, v in row.items()}
+            lic = str(row.get(c_lic) or "").lower() if c_lic else ""
+            if lic and not any(k in lic for k in _BR_BUILD_LIC):
+                continue
+            nm = str(row.get(c_nm) or "").strip()
+            if not nm: continue
+            jit += 0.37
+            tip = str(row.get(c_tip) or "").strip()
+            p = {"name": nm[:140],
+                 "type": (tip or "Environmental licence (Brazil)")[:60],
+                 "state": "Brazil",
+                 "lat": round(_BR_CENTER[0] + (jit % 7.0) - 3.5, 4),
+                 "lng": round(_BR_CENTER[1] + ((jit * 1.7) % 9.0) - 4.5, 4),
+                 "precise": False, "size": "",
+                 "status": str(row.get(c_lic) or "")[:60], "company": "",
+                 "url": "https://dadosabertos.ibama.gov.br/dataset/"
+                        "licencas-ambientais-de-atividades-e-empreendimentos-licenciados-pelo-ibama",
+                 "desc": ("Brazilian federal environmental licence (IBAMA)" +
+                          ((" \u00b7 " + str(row.get(c_lic))) if c_lic and row.get(c_lic) else "") +
+                          ((" \u00b7 " + str(row.get(c_dat))[:10]) if c_dat and row.get(c_dat) else "") +
+                          ". IBAMA publishes no coordinates \u2014 shown at national level; "
+                          "open the register for the site."),
+                 "source": "ibama_br"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  ibama br: %d licences (national-level placement)" % len(out))
+    return out
 
 def fetch_ibama_br(max_rows=4000):
     base = "https://dadosabertos.ibama.gov.br/api/3/action/package_show?id="
@@ -1562,9 +1713,10 @@ def fetch_ibama_br(max_rows=4000):
         if _sniff_col(cc, "latitude", "lat") or _sniff_col(cc, "uf", "estado", "municipio"):
             rdr = rr; cols = cc; break
     if rdr is None:
-        print("  ibama br: no resource carries coordinates or a state/municipality "
-              "column -- cannot be mapped (skip)")
-        return []
+        # No resource carries geography. The licences are real, so publish them at
+        # the NATIONAL centroid, clearly flagged approximate, rather than dropping.
+        print("  ibama br: no geo column in any resource -- placing at national level")
+        return _ibama_national(csvs, max_rows)
     c_lat = _sniff_col(cols, "latitude", "lat")
     c_lng = _sniff_col(cols, "longitude", "long", "lng")
     c_nm  = _sniff_col(cols, "empreendimento", "nome", "denomina", "atividade")
@@ -1830,10 +1982,99 @@ def _slim(p):
         q[k] = v
     return q
 
+
+# ---------------------------------------------------------------------------
+# CKAN federation -- national open-data portals worldwide run CKAN, which has a
+# standard API. We search each portal for permit / licence / project datasets
+# that publish GeoJSON, and map the points. This is the third route to covering
+# countries with no national register (Chile, Spain, Italy, Poland, Ireland...).
+# Free, no keys.
+# ---------------------------------------------------------------------------
+_CKAN_PORTALS = [
+    ("https://datos.gob.cl", "Chile", "cl"),
+    ("https://datos.gob.es/apidata", "Spain", "es"),
+    ("https://dados.gov.br", "Brazil", "br"),
+    ("https://data.gov.ie", "Ireland", "ie"),
+    ("https://catalogue.data.govt.nz", "New Zealand", "nz"),
+    ("https://data.overheid.nl/data", "Netherlands", "nl"),
+    ("https://opendata.swiss", "Switzerland", "ch"),
+    ("https://data.gov.au/data", "Australia", "au"),
+    ("https://www.dati.gov.it/opendata", "Italy", "it"),
+    ("https://dane.gov.pl", "Poland", "pl"),
+    ("https://data.norge.no", "Norway", "no"),
+    ("https://www.govdata.de/ckan", "Germany", "de"),
+]
+_CKAN_TERMS = ["permis construction", "licencia construccion", "building permit",
+               "permesso costruire", "pozwolenie budowe", "bouwvergunning",
+               "byggetillatelse", "baugenehmigung", "proyectos construccion"]
+_CKAN_TITLE_RE = re.compile(
+    r"(permit|permis|licenc|licens|vergunning|genehmigung|pozwolen|costruire|"
+    r"bygge|bygglov|construc|construction|obra|edifica|planning|urban)", re.I)
+
+def fetch_ckan_federation(per_portal=3, per_ds=1500):
+    out = []
+    for (base, country, cc) in _CKAN_PORTALS:
+        pkgs = []; seen = set()
+        for term in _CKAN_TERMS[:4]:
+            try:
+                u = base.rstrip("/") + "/api/3/action/package_search?" + urllib.parse.urlencode(
+                    {"q": term, "rows": 25})
+                d = _get_json(u)
+            except Exception:
+                continue
+            for pk in (((d or {}).get("result") or {}).get("results") or []):
+                nm = str(pk.get("title") or pk.get("name") or "")
+                if pk.get("id") in seen: continue
+                if not _CKAN_TITLE_RE.search(nm): continue
+                seen.add(pk.get("id")); pkgs.append(pk)
+            time.sleep(0.3)
+        got = 0
+        for pk in pkgs:
+            if got >= per_portal: break
+            geo = [r for r in (pk.get("resources") or [])
+                   if str(r.get("format", "")).lower() in ("geojson", "json") and r.get("url")]
+            for r in geo[:1]:
+                try:
+                    req = urllib.request.Request(r["url"], headers={"User-Agent": UA})
+                    with urllib.request.urlopen(req, timeout=90) as resp:
+                        gj = json.loads(resp.read().decode("utf-8", "replace"))
+                except Exception:
+                    continue
+                feats = gj.get("features") if isinstance(gj, dict) else None
+                if not feats: continue
+                got += 1
+                n0 = len(out)
+                for f in feats[:per_ds]:
+                    try:
+                        ll = _geom_center(f.get("geometry") or {})
+                        if not ll: continue
+                        props = f.get("properties") or {}
+                        nm = _best_name(props, ("NAME", "TITLE", "DESCRIPCION",
+                                                "DESCRIPTION", "OBRA", "PROYECTO"))
+                        p = {"name": (nm or str(pk.get("title") or "Permit"))[:140],
+                             "type": "Permit / development (%s)" % country,
+                             "state": country,
+                             "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                             "precise": True, "size": "", "status": "", "company": "",
+                             "url": base, "desc": ("From %s open data \u00b7 %s."
+                                                   % (country, str(pk.get("title") or "")[:70])),
+                             "source": "ckan_%s" % cc}
+                        p["impact"] = rate_project(p, sensitivity=0)
+                        out.append(p)
+                    except Exception:
+                        continue
+                if len(out) > n0:
+                    print("  ckan %s: +%d from '%s'" % (country, len(out) - n0,
+                                                         str(pk.get("title"))[:40]))
+                time.sleep(0.3)
+    print("  ckan federation: %d points from %d portals" % (len(out), len(_CKAN_PORTALS)))
+    return out
+
 def main():
     items = []
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
     _SOCRATA_OFF = {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org"}  # 400s; PermitStack covers these
+    items += _run("ckan_federation", fetch_ckan_federation)     # national CKAN portals worldwide
     items += _run("arcgis_hub", fetch_arcgis_hub)               # US city/county permits (no cap)
     items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
                                               if cfg.get("domain") not in _SOCRATA_OFF

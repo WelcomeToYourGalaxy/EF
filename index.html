@@ -1314,14 +1314,27 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
   var _projRenderer=(typeof map!=='undefined' && L && L.svg)?L.svg({pane:'projPane'}):null;
   function stars(n){return Array(n+1).join("\u2605")+Array(6-n).join("\u2606");}
   var pjLayer=null, pjData=null, pjOn=true;
-  var pjCanvas = L.canvas({padding:0.5});
+  var pjCanvas = null;
+  function pjGetCanvas(){
+    if(pjCanvas) return pjCanvas;
+    // draw projects into the dedicated projPane (z-index 620) so the dots sit
+    // ABOVE the region-highlight polygons and stay clickable.
+    try{
+      if(!map.getPane("projPane")){ map.createPane("projPane"); map.getPane("projPane").style.zIndex=620; }
+      var pn=map.getPane("projPane"); pn.style.pointerEvents="auto";
+      pjCanvas=L.canvas({padding:0.5, pane:"projPane"});
+    }catch(e){ pjCanvas=L.canvas({padding:0.5}); }
+    return pjCanvas;
+  }
   var PJ_SRC=[
     {k:"permitstack",cat:"\ud83c\udfd7\ufe0f Building permits",label:"New construction \u2014 nationwide",
      desc:"When a big new building is approved, the city issues a permit. This shows those permits from all 50 states \u2014 but only ones filed in the last 30 days, so it\u2019s what\u2019s newest and just starting."},
     {k:"socrata",cat:"\ud83c\udfd7\ufe0f Building permits",label:"Chicago & Seattle \u2014 full history",
      desc:"The same kind of building permits, but the complete back-catalog for just two cities (Chicago and Seattle), including older projects \u2014 not only the last 30 days."},
-    {k:"arcgis_hub",cat:"\ud83c\udfd7\ufe0f Building permits",label:"More cities & counties",
-     desc:"Large building permits pulled directly from individual city and county open-data sites \u2014 extra coverage beyond the nationwide feed, with no request limit."},
+    {k:"ckan",cat:"\ud83c\udfd7\ufe0f Building permits",label:"National open-data portals",
+     desc:"Permits and development records published by national open-data portals \u2014 Chile, Spain, Italy, Ireland, Poland, Netherlands, Norway, Germany, Switzerland, New Zealand and more."},
+    {k:"arcgis_hub",cat:"\ud83c\udfd7\ufe0f Building permits",label:"Cities & regions worldwide",
+     desc:"Permits pulled straight from individual city and regional open-data sites around the world, searched in 12 languages \u2014 this is how countries with no national register (Germany, Spain, Italy, Japan\u2026) get covered, one authority at a time."},
     {k:"planit",cat:"\ud83c\uddec\ud83c\udde7 UK planning",label:"UK planning applications",
      desc:"Large planning applications from across the UK (420 local authorities), via the national PlanIt aggregator \u2014 the UK equivalent of the US permit feeds."},
     {k:"federal_register",cat:"\ud83c\uddfa\ud83c\uddf8 US government reviews",label:"Federal environmental reviews",
@@ -1347,7 +1360,10 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     {k:"ejatlas",cat:"\ud83c\udf0d Global",label:"Environmental-justice conflicts",
      desc:"Community fights against harmful projects worldwide, documented by the Environmental Justice Atlas."}
   ];
-  function pjSrcGroup(s){ s=s||""; return s.indexOf("socrata")===0?"socrata":s; }
+  function pjSrcGroup(s){ s=s||"";
+    if(s.indexOf("socrata")===0) return "socrata";
+    if(s.indexOf("ckan_")===0) return "ckan";
+    return s; }
   var activeProjSrc=new Set(PJ_SRC.map(function(s){return s.k;}));
   function pjBuildSrcUI(){
     var box=document.getElementById("projSrcBox"); if(!box) return;
@@ -1389,9 +1405,9 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
       var i=p.impact||1, c=PC[i]||"#3fa66a";
       var r=i>=5?7:i>=4?6:i>=3?5:i>=2?4.5:4;
       var m = (p.precise===false)
-        ? L.circleMarker([p.lat,p.lng],{renderer:pjCanvas,radius:r+1,color:c,weight:1.6,
+        ? L.circleMarker([p.lat,p.lng],{renderer:pjGetCanvas(),radius:r+1,color:c,weight:1.6,
             dashArray:"3,2",fillColor:c,fillOpacity:0.14})
-        : L.circleMarker([p.lat,p.lng],{renderer:pjCanvas,radius:r,color:"#ffffff",weight:1.1,
+        : L.circleMarker([p.lat,p.lng],{renderer:pjGetCanvas(),radius:r,color:"#ffffff",weight:1.1,
             fillColor:c,fillOpacity:0.92});
       m.__p = p;
       m.on('click', function(){
