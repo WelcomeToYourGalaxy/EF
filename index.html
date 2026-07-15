@@ -1314,6 +1314,7 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
   var _projRenderer=(typeof map!=='undefined' && L && L.svg)?L.svg({pane:'projPane'}):null;
   function stars(n){return Array(n+1).join("\u2605")+Array(6-n).join("\u2606");}
   var pjLayer=null, pjData=null, pjOn=true;
+  var pjCanvas = L.canvas({padding:0.5});
   var PJ_SRC=[
     {k:"permitstack",cat:"\ud83c\udfd7\ufe0f Building permits",label:"New construction \u2014 nationwide",
      desc:"When a big new building is approved, the city issues a permit. This shows those permits from all 50 states \u2014 but only ones filed in the last 30 days, so it\u2019s what\u2019s newest and just starting."},
@@ -1385,8 +1386,27 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     ((pjData&&pjData.projects)||[]).forEach(function(p){
       if(p.lat==null||p.lng==null) return;
       if(!activeProjSrc.has(pjSrcGroup(p.source))) return;
-      var m=L.marker([p.lat,p.lng],{icon:pjIcon(p.impact||1, p.precise)});
-      m.bindPopup('<div class="pjm-pop">'+(p.precise===false?'<div class="approx-badge">\u2248 Approximate \u2014 country/state level; open source for exact site</div>':'')+'<b>'+p.name+'</b><br><span class="t">'+(p.type||'project')+'</span>'+(p.state||'')+(p.company?' \u00b7 '+p.company:'')+'<div class="d">'+(p.desc||'')+'</div>'+(p.size?'<div class="d">Scale: '+p.size+(p.status?' \u00b7 '+p.status:'')+'</div>':'')+(p.url?'<div class="d"><a href="'+p.url+'" target="_blank" style="color:#ff9d6b">Open notice \u2192</a></div>':'')+'</div>',{maxWidth:320});
+      var i=p.impact||1, c=PC[i]||"#3fa66a";
+      var r=i>=5?7:i>=4?6:i>=3?5:i>=2?4.5:4;
+      var m = (p.precise===false)
+        ? L.circleMarker([p.lat,p.lng],{renderer:pjCanvas,radius:r+1,color:c,weight:1.6,
+            dashArray:"3,2",fillColor:c,fillOpacity:0.14})
+        : L.circleMarker([p.lat,p.lng],{renderer:pjCanvas,radius:r,color:"#ffffff",weight:1.1,
+            fillColor:c,fillOpacity:0.92});
+      m.__p = p;
+      m.on('click', function(){
+        if(this._popup) return;
+        var q=this.__p;
+        var html='<div class="pjm-pop">'
+          +(q.precise===false?'<div class="approx-badge">\u2248 Approximate \u2014 area/region level; open source for exact site</div>':'')
+          +'<b>'+(q.name||'Project')+'</b><br><span class="t">'+(q.type||'project')+'</span>'+(q.state||'')
+          +(q.company?' \u00b7 '+q.company:'')
+          +'<div class="d">'+(q.desc||'')+'</div>'
+          +(q.size?'<div class="d">Scale: '+q.size+(q.status?' \u00b7 '+q.status:'')+'</div>':'')
+          +(q.url?'<div class="d"><a href="'+q.url+'" target="_blank" style="color:#ff9d6b">Open source \u2192</a></div>':'')
+          +'</div>';
+        this.bindPopup(html,{maxWidth:320}).openPopup();
+      });
       pjLayer.addLayer(m);
     });
     if(pjOn && typeof map!=='undefined'){ pjLayer.addTo(map); }

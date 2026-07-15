@@ -853,10 +853,9 @@ def fetch_world_bank(rows=1000):
                 _secraw = _secraw.get("Name") or _secraw.get("name") or ""
             _title = str(pr.get("project_name") or "")
             _sb = _sector_is_build(_secraw)          # True / False / None(unknown)
-            _keep = _sb if _sb is not None else _is_build(_title)
-            if _sb is False and _is_build(_title):
-                _keep = True                          # sector says programme but title names works
-            if not _keep:
+            if _sb is False:
+                continue
+            if not _is_hard_build(_title):
                 continue
             _pl = _extract_place(pr.get("project_name") or "")
             _cc2 = cc.lower() if len(cc) == 2 else None
@@ -945,6 +944,41 @@ _PROGRAM_WORDS = (
     "immunization", "devolution support", "service delivery", "resilience program",
     "sector efficiency", "value chain", "financial inclusion", "pension",
 )
+
+# ---- STRICT filter for aid/development sources -----------------------------
+# Only HARD infrastructure that physically takes land: roads, rail, ports,
+# dams, power, pipelines, mines. Deliberately EXCLUDES water-supply/sanitation
+# programmes, housing/health/education construction and "rehabilitation" work,
+# which are mostly programmatic even when some building happens.
+_HARD_BUILD_RE = re.compile(r"\b("
+    r"highway|expressway|motorway|ring\s+road|trunk\s+road|rural\s+roads?|feeder\s+roads?|"
+    r"road\s+(?:corridor|upgrading|construction|rehabilitation|project|network)|roads?\s+and\s+bridges|"
+    r"bridges?|tunnels?|railways?|rail\s+(?:line|corridor|link)|metro\s+rail|light\s+rail|"
+    r"bus\s+rapid\s+transit|brt|ports?|harbours?|harbors?|jetty|wharf|quay|"
+    r"airports?|runways?|dams?|reservoirs?|barrage|weir|hydro\s?power|hydroelectric|"
+    r"irrigation|pipelines?|power\s+plants?|thermal\s+plant|coal\s+plant|gas\s+plant|"
+    r"power\s+station|geothermal|solar|photovoltaic|"
+    r"wind\s+(?:farm|power\s+plant)|transmission\s+(?:line|network|system)|substations?|"
+    r"grid\s+(?:extension|expansion|reinforcement)|interconnector|electrification|"
+    r"mines?|mining|quarry|smelter|refinery|lng|coal\s+terminal|oil\s+terminal|"
+    r"landfill|incinerator|canals?|hydro"
+    r")\b", re.I)
+_HARD_DENY_RE = re.compile(r"\b("
+    r"water\s+supply|sanitation|sewerage|sewer|wastewater|hygiene|wash|"
+    r"rehabilitation|reconstruction|housing|hospitals?|clinics?|schools?|classrooms?|"
+    r"education|health|capacity|policy|technical\s+assistance|resilience|livelihoods?|"
+    r"institutional|governance|training|scholarship|programme\s+support|program\s+support|"
+    r"sector\s+support|budget\s+support|master.s\s+degree|reporting|transparency|"
+    r"employment|procurement|single\s+window|feasibility|study|studies|strengthening|management|promotion|promoting|securing|awareness|assessment|monitoring|"r"indicator|transit\s+times|preparation|advisory|planning|design\s+of|consultancy|supervision|trade|exchange|corridors\s+and"
+    r")\b", re.I)
+
+def _is_hard_build(text):
+    """Only HARD, land-taking infrastructure: roads, rail, ports, dams, power,
+    pipelines, mines. Word-boundary matched -- 'Support' must never match 'port'."""
+    t = text or ""
+    if _HARD_DENY_RE.search(t): return False
+    return bool(_HARD_BUILD_RE.search(t))
+
 def _is_build(text):
     """True if a development project title reads as PHYSICAL construction."""
     t = (text or "").lower()
@@ -1053,11 +1087,10 @@ def fetch_iati(per=1000):
             if not ll: continue
             nm = _iati_find(a, "narrative") or _iati_find(a, "title") or "Development activity"
             _db = _dac_is_build(_iati_sector_code(a))    # True / False / None(unknown)
-            _keep = _db if _db is not None else _is_build(str(nm))
-            if _db is False and _is_build(str(nm)):
-                _keep = True
-            if not _keep:
-                continue
+            if _db is False:
+                continue                                  # sector says programme
+            if not _is_hard_build(str(nm)):
+                continue                                  # title must name hard infrastructure
             withloc += 1
             cn = _iati_find(a, "recipient-country") or _iati_find(a, "code") or ""
             org = _iati_find(a, "reporting-org") or _iati_find(a, "narrative") or ""
@@ -1366,16 +1399,17 @@ def fetch_iaac_ca():
     out = []; dropped = 0
     for f in feats:
         try:
-            ll = _geom_center(f.get("geometry") or {})
-            if not ll: continue
             pr0 = f.get("properties") or {}
             _up0 = {str(k).upper(): v for k, v in pr0.items()}
+            _la = _num(_up0.get("LATITUDE")); _lo = _num(_up0.get("LONGITUDE"))
+            ll = (_la, _lo) if (_la is not None and _lo is not None) else _geom_center(f.get("geometry") or {})
+            if not ll or ll[0] is None: continue
             _approx = False; _note = ""
             # source contains malformed records (points in Mali, Latvia, Indonesia...).
             # Canada has no overseas territory, so re-place them at the province /
             # national centroid and mark them approximate instead of deleting them.
             if not _box_ok("iaac_ca", ll[0], ll[1]):
-                fb = _fallback_center("iaac_ca", _up0.get("PROVINCE") or _up0.get("REGION") or "")
+                fb = _fallback_center("iaac_ca", _up0.get("PROVINCE_CODES") or _up0.get("PROVINCE") or "")
                 if not fb:
                     dropped += 1; continue
                 ll = (fb[0], fb[1]); _approx = True; dropped += 1
@@ -1387,17 +1421,15 @@ def fetch_iaac_ca():
             if not out and not _CA_KEYS_SHOWN:
                 print("  iaac ca [fields]: %s" % sorted(list(pr.keys()))[:18])
                 _CA_KEYS_SHOWN.append(1)
-            nm = _best_name(pr, ("PROJECT_NAME", "PROJECTNAME", "NAME_EN", "NAME",
-                                 "TITLE_EN", "TITLE", "PROJECT", "ASSESSMENT_NAME",
-                                 "PROJECT_TITLE", "ENGLISH_NAME", "LABEL", "NOM"))
-            if not nm:
-                nm = "Impact assessment"
-            status = str(up.get("STATUS") or up.get("PHASE") or up.get("STAGE") or "")
-            p = {"name": str(nm)[:140], "type": "Impact assessment (Canada)",
-                 "state": str(up.get("PROVINCE") or up.get("REGION") or "Canada"),
+            nm = (up.get("PROJECT_NAME_EN") or up.get("PROJECT_NAME")
+                  or up.get("DESCRIPTION_EN") or "Impact assessment")
+            status = str(up.get("PROJECT_STATE_EN") or up.get("STATUS") or "")
+            p = {"name": str(nm)[:140],
+                 "type": str(up.get("PROJECT_CAT_EN") or "Impact assessment (Canada)"),
+                 "state": str(up.get("LOCATION_EN") or up.get("PROVINCE_CODES") or "Canada"),
                  "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": not _approx,
-                 "size": "", "status": status, "company": str(up.get("PROPONENT") or "")[:80],
-                 "url": "https://iaac-aeic.gc.ca/050/evaluations",
+                 "size": "", "status": status, "company": str(up.get("PROPONENT_EN") or "")[:80],
+                 "url": str(up.get("PROJECT_URL_EN") or "https://iaac-aeic.gc.ca/050/evaluations"),
                  "desc": ("Canadian federal impact assessment" +
                           ((" \u00b7 " + status) if status else "") +
                           ". From the Impact Assessment Registry." + _note),
@@ -1512,18 +1544,27 @@ def fetch_ibama_br(max_rows=4000):
             and r.get("url")]
     if not csvs:
         print("  ibama br: no CSV resource found (%d resources)" % len(res)); return []
-    url = csvs[0]["url"]
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=180) as r:
-            raw = r.read().decode("utf-8", "replace")
-    except Exception as e:
-        print("  ibama br: csv download failed: %s" % e); return []
     import csv as _csv, io as _io
-    delim = ";" if raw[:2000].count(";") > raw[:2000].count(",") else ","
-    rdr = _csv.DictReader(_io.StringIO(raw), delimiter=delim)
-    cols = rdr.fieldnames or []
-    print("  ibama br [fields]: %s" % cols[:14])
+    rdr = None; cols = []
+    # the main licence table publishes NO location column -- scan the package's
+    # resources for one that actually carries coordinates or a state/municipality.
+    for cand in csvs[:6]:
+        try:
+            req = urllib.request.Request(cand["url"], headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                raw = r.read().decode("utf-8-sig", "replace")
+        except Exception as e:
+            print("  ibama br: download failed (%s): %s" % (str(cand.get("name"))[:30], e)); continue
+        delim = ";" if raw[:2000].count(";") > raw[:2000].count(",") else ","
+        rr = _csv.DictReader(_io.StringIO(raw), delimiter=delim)
+        cc = [str(c).lstrip("\ufeff") for c in (rr.fieldnames or [])]
+        print("  ibama br [fields] %s: %s" % (str(cand.get("name"))[:28], cc[:12]))
+        if _sniff_col(cc, "latitude", "lat") or _sniff_col(cc, "uf", "estado", "municipio"):
+            rdr = rr; cols = cc; break
+    if rdr is None:
+        print("  ibama br: no resource carries coordinates or a state/municipality "
+              "column -- cannot be mapped (skip)")
+        return []
     c_lat = _sniff_col(cols, "latitude", "lat")
     c_lng = _sniff_col(cols, "longitude", "long", "lng")
     c_nm  = _sniff_col(cols, "empreendimento", "nome", "denomina", "atividade")
@@ -1534,6 +1575,7 @@ def fetch_ibama_br(max_rows=4000):
     for row in rdr:
         if n >= max_rows: break
         try:
+            row = {str(k).lstrip("\ufeff"): v for k, v in row.items()}
             lic = str(row.get(c_lic) or "").lower() if c_lic else ""
             if lic and not any(k in lic for k in _BR_BUILD_LIC):
                 continue
@@ -1771,6 +1813,23 @@ def fetch_parivesh_in(per=1000, max_rows=3000):
     print("  parivesh in: %d clearances" % len(out))
     return out
 
+
+def _slim(p):
+    """Trim each project for wire size: drop empty fields, round coords to ~11m,
+    cap prose. 20k+ projects make every byte count for map load time."""
+    q = {}
+    for k, v in p.items():
+        if v is None or v == "" or v == []: continue
+        if k in ("lat", "lng"):
+            try: q[k] = round(float(v), 4)
+            except Exception: pass
+            continue
+        if k == "desc":
+            q[k] = str(v)[:170]; continue
+        if k in ("mw",): continue
+        q[k] = v
+    return q
+
 def main():
     items = []
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
@@ -1822,13 +1881,14 @@ def main():
                 return
         except Exception:
             pass
+    items = [_slim(p) for p in items]
     out = {"_meta": {"generated": datetime.datetime.utcnow().isoformat() + "Z",
                      "count": len(items),
                      "sources": "socrata permits, land matrix, global energy monitor, epa eis, ferc, ejatlas",
                      "rating_scale": "1 minor / 2 local / 3 regional / 4 major / 5 landscape"},
            "projects": items}
     with open("projects.json", "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1)
+        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     print("wrote projects.json with %d projects" % len(items))
     if not items:
         print("NOTE: no sources wired yet -- fill SOCRATA_CITIES and uncomment a "
