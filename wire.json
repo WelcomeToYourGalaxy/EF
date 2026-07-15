@@ -345,19 +345,19 @@
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
-  "title": "Mexican west coast LNG terminal ships first cargoes - Lloyd's List",
-  "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxQSEtubW45RFhWNkJtbGJuNEh4NVJkOXE0RWlFcXhuNkRMcXZfSFJUZHRrUXU0bmhoc083LUdCREN0MnA2Z3VrTXpYVjZyTGswdXE3anp4aUUwOGItLVRZcmNjTllCR2NqZWNhcXJLTEQ2aG93VjR2OEF1RlpmU2w0ang5Rlp5UnEtd2tEMUpQMm9KZw?oc=5",
-  "date": 1783680541000,
-  "sig": 3,
-  "snippet": "Mexican west coast LNG terminal ships first cargoes  Lloyd's List"
- },
- {
-  "name": "Front: LNG terminal Gulf Coast",
   "title": "Mexico starts first exports from Pacific LNG terminal - Quantum Commodity Intelligence",
   "link": "https://news.google.com/rss/articles/CBMinAFBVV95cUxQOWxiSmlGeGlmSUdDVXdIY2Z1Smt1VmJNclpEdkRwLXdTVlRidjhJQUVjVmxqTDdjcklxSXBYNE9HSmZzZEhzWmtpa1NnblFrQWRueE96Vk5FTVQ5Vm5iOFNDR2dMZ2g3X19ISHViSUxYS1FwLUNsVHFnVjRieW5xcEdpeEExZmdJYTBpaER0WVdMWnh3V2x6d2VCcjU?oc=5",
   "date": 1783574073000,
   "sig": 3,
   "snippet": "Mexico starts first exports from Pacific LNG terminal  Quantum Commodity Intelligence"
+ },
+ {
+  "name": "Front: LNG terminal Gulf Coast",
+  "title": "Mexican west coast LNG terminal ships first cargoes - Lloyd's List",
+  "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxQSEtubW45RFhWNkJtbGJuNEh4NVJkOXE0RWlFcXhuNkRMcXZfSFJUZHRrUXU0bmhoc083LUdCREN0MnA2Z3VrTXpYVjZyTGswdXE3anp4aUUwOGItLVRZcmNjTllCR2NqZWNhcXJLTEQ2aG93VjR2OEF1RlpmU2w0ang5Rlp5UnEtd2tEMUpQMm9KZw?oc=5",
+  "date": 1783680541000,
+  "sig": 3,
+  "snippet": "Mexican west coast LNG terminal ships first cargoes  Lloyd's List"
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
@@ -374,14 +374,6 @@
   "date": 1783633800000,
   "sig": 3,
   "snippet": "Energia Costa Azul LNG First Shipment: New Competitor for Asian Markets - News and Statistics  IndexBox"
- },
- {
-  "name": "Front: LNG terminal Gulf Coast",
-  "title": "TotalEnergies Launches First LNG Shipment from Mexico’s ECA LNG Terminal to Strengthen Asian Energy Supply - ChemAnalyst",
-  "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxPdzZJWE1RMFJPMWtyczNNQ3NRSEpXSmlFZi11TC1jLTY1TVM3cUd3d2ptcmRnQWxxeGZxaVRFM3JNOW84eGxmWTZVblNMMU0tSUZDbEFFc0h1ckJhVkxEUzB3WHFKMlJTeDk2MElIQWlIa1hDSzFSQ0NQZE9JTW9BLXZaYzBJdmU1MHI0a3FmLURQQUxNQVVuZ1V2b3BwMFFqdzdHYURKSG1ZNnUwQW9icHFSYVFCZXBpMlo1b3NR?oc=5",
-  "date": 1783588914000,
-  "sig": 3,
-  "snippet": "TotalEnergies Launches First LNG Shipment from Mexico’s ECA LNG Terminal to Strengthen Asian Energy Supply  ChemAnalyst"
  },
  {
   "name": "Front: LNG terminal Gulf Coast",
@@ -478,5 +470,13 @@
   "date": 1782370800000,
   "sig": 3,
   "snippet": "FERC Gives OK for MVP Southgate Construction to Begin in N.C.  Marcellus Drilling News"
+ },
+ {
+  "name": "Front: Mountain Valley Pipeline",
+  "title": "DEQ suspends MVP compressor station permit - WVTF",
+  "link": "https://news.google.com/rss/articles/CBMihgFBVV95cUxNMXlVeEpBVzExQTEyUm43cnhKZzE5UV9aZFMzWWdVOUFLVVNyUlpobGM0NHBwUzBWdWRMZzdHWGVWUzlzSDZ5N0tDNDFGN2dHTVZDcnJXVHFWOVJlZGpwajNnb0FOOG9kRm5TTEZ6bkNodG5fdU9ZcFJCZXFjSGxiOHVKMDFBdw?oc=5",
+  "date": 1783062000000,
+  "sig": 3,
+  "snippet": "DEQ suspends MVP compressor station permit  WVTF"
  }
 ]
