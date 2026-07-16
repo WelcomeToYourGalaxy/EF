@@ -1612,18 +1612,20 @@ _OVERPASS_EPS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
 ]
-def _overpass(q, label=""):
+def _overpass(q, label="", deadline=None):
     """POST an Overpass query, trying each mirror. Returns parsed JSON or None."""
     for i, ep in enumerate(_OVERPASS_EPS):
+        if deadline and time.time() > deadline:
+            return None                      # out of time; don't start another call
         try:
             req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
                                          headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with urllib.request.urlopen(req, timeout=75) as r:
                 return json.loads(r.read().decode("utf-8", "replace"))
         except Exception as ex:
             if i == len(_OVERPASS_EPS) - 1:
-                print("  osm %s failed on all mirrors: %s" % (label, str(ex)[:60]))
-            time.sleep(1.5)
+                print("  osm %s failed on all mirrors: %s" % (label, str(ex)[:50]))
+            time.sleep(1.0)
     return None
 
 def _quarters(s, w, n, e):
@@ -1632,7 +1634,7 @@ def _quarters(s, w, n, e):
 
 def _osm_query(s, w, n, e, cap):
     bb = "%s,%s,%s,%s" % (s, w, n, e)
-    return ('[out:json][timeout:180];('
+    return ('[out:json][timeout:70];('
             'way["landuse"="construction"](%s)(if:length()>400);'
             'way["highway"="construction"](%s)(if:length()>800);'
             'way["railway"="construction"](%s)(if:length()>800);'
@@ -1689,8 +1691,14 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
           "-> spread worldwide" % (len(grid), len(todo), stride, offset))
     out = _osm_existing()
     print("  osm: carried %d sites forward from previous runs" % len(out))
-    ok_boxes = 0; timeouts = 0
+    ok_boxes = 0; timeouts = 0; skipped_time = 0
+    budget_min = int(os.environ.get("OSM_BUDGET_MIN", "150"))
+    t_end = time.time() + budget_min * 60
+    print("  osm: wall-clock budget %d min -- will stop early and still save" % budget_min)
     for (s, w, n, e) in todo:
+        if time.time() > t_end:
+            skipped_time += 1
+            continue
         label = "%.0f,%.0f" % (s, w)
         bb = "%s,%s,%s,%s" % (s, w, n, e)
         # widened tag set: sites, roads, rail, buildings, plus proposed/under-way
@@ -1698,7 +1706,7 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
         # Overpass can measure features, so instead of an arbitrary cap we keep the
         # BIG ones: length() on a closed way is its perimeter (400m ~ 1 hectare),
         # on a road/rail it's the route length.
-        q = ('[out:json][timeout:240];('
+        q = ('[out:json][timeout:70];('
              'way["landuse"="construction"](%s)(if:length()>400);'
              'way["highway"="construction"](%s)(if:length()>800);'
              'way["railway"="construction"](%s)(if:length()>800);'
@@ -1709,15 +1717,17 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
              'way["waterway"="dam"]["construction"](%s);'
              'relation["landuse"="construction"](%s);'
              ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
-        data = _overpass(q, label)
+        data = _overpass(q, label, deadline=t_end)
         if data is None:
             # A 504 means the tile was too heavy for the server, not that it is
             # empty. Split it into quarters and retry -- otherwise dense areas
             # (Europe, East Asia) would time out forever and stay blank.
             hit = False
+            if time.time() > t_end - 180:
+                timeouts += 1; continue      # no time to split; leave for next run
             for (qs, qw, qn, qe) in _quarters(s, w, n, e):
                 sub = _osm_query(qs, qw, qn, qe, cap)
-                d2 = _overpass(sub, label + "/q")
+                d2 = _overpass(sub, label + "/q", deadline=t_end)
                 if d2 is not None:
                     hit = True
                     _osm_collect(d2, label, out)
@@ -1762,8 +1772,9 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
         k = (round(q.get("lat", 0), 4), round(q.get("lng", 0), 4))
         if k in seen: continue
         seen.add(k); merged.append(q)
-    print("  osm construction: %d sites total (%d/%d tiles ok, %d still timed out)"
-          % (len(merged), ok_boxes, len(todo), timeouts))
+    print("  osm construction: %d sites total (%d/%d tiles ok, %d timed out, "
+          "%d skipped for time -- next run rotates to them)"
+          % (len(merged), ok_boxes, len(todo), timeouts, skipped_time))
     return merged
 
 
@@ -2317,6 +2328,71 @@ def _finish(items):
 
 
 
+
+# ---------------------------------------------------------------------------
+# SHARDED OSM: the grid is far too big for one job, so N parallel jobs each take
+# every Nth tile (shard k of n). Each writes osm_part_k.json; a final merge job
+# folds them into projects.json. Full 817-tile global sweep on EVERY run.
+# ---------------------------------------------------------------------------
+def fetch_osm_shard(k, n, cap=3000):
+    grid = _osm_tiles()
+    todo = [grid[i] for i in range(len(grid)) if i % n == k]
+    budget_min = int(os.environ.get("OSM_BUDGET_MIN", "150"))
+    t_end = time.time() + budget_min * 60
+    print("  osm shard %d/%d: %d tiles (of %d), budget %d min"
+          % (k, n, len(todo), len(grid), budget_min))
+    out = []; ok = 0; to = 0; skipped = 0
+    for (s, w, n_, e) in todo:
+        if time.time() > t_end:
+            skipped += 1; continue
+        label = "%.0f,%.0f" % (s, w)
+        q = _osm_query(s, w, n_, e, cap)
+        data = _overpass(q, label, deadline=t_end)
+        if data is None:
+            if time.time() > t_end - 120:
+                to += 1; continue
+            hit = False
+            for (qs, qw, qn, qe) in _quarters(s, w, n_, e):
+                d2 = _overpass(_osm_query(qs, qw, qn, qe, cap), label + "/q", deadline=t_end)
+                if d2 is not None:
+                    hit = True; _osm_collect(d2, label, out)
+                time.sleep(0.6)
+            if hit: ok += 1
+            else: to += 1
+            continue
+        ok += 1
+        _osm_collect(data, label, out)
+        time.sleep(0.8)
+    print("  osm shard %d/%d: %d sites (%d tiles ok, %d timed out, %d skipped for time)"
+          % (k, n, len(out), ok, to, skipped))
+    return out
+
+def _osm_merge_parts():
+    """Merge every osm_part_*.json produced by the shard jobs into projects.json."""
+    import glob as _glob
+    parts = sorted(_glob.glob("osm_part_*.json"))
+    fresh = []
+    for f in parts:
+        try:
+            rows = json.load(open(f, encoding="utf-8"))
+            fresh += rows if isinstance(rows, list) else []
+            print("  merge: %s -> %d sites" % (f, len(rows)))
+        except Exception as ex:
+            print("  merge: %s unreadable: %s" % (f, ex))
+    if not parts:
+        print("  merge: no osm_part_*.json found -- nothing to merge"); return
+    keep = _carry_sources(lambda s: s != "osm_construction", "daily sources")
+    prior = _carry_sources(lambda s: s == "osm_construction", "prior osm")
+    if not fresh:
+        # every shard came back empty (Overpass outage): keep what we already had
+        print("  merge: all shards empty -- keeping %d prior OSM sites" % len(prior))
+        _finish(keep + prior); return
+    # fresh FIRST so dedup prefers it, prior second so any region whose shard failed
+    # keeps its previous coverage instead of being silently wiped.
+    print("  merge: %d fresh OSM sites from %d shard(s) + %d prior retained where a "
+          "shard produced nothing" % (len(fresh), len(parts), len(prior)))
+    _finish(keep + fresh + prior)
+
 def _carry_sources(pred, label):
     """Reuse entries already in projects.json for sources this run isn't refreshing."""
     try:
@@ -2329,6 +2405,20 @@ def _carry_sources(pred, label):
     return keep
 
 def main():
+    # merge job: fold the shard artifacts into projects.json
+    if os.environ.get("OSM_MERGE") == "1":
+        print("MODE: merge OSM shard parts")
+        _osm_merge_parts(); return
+    # shard job: harvest one slice of the tile grid, write it as an artifact
+    sh = os.environ.get("OSM_SHARD")
+    if sh is not None and sh != "":
+        k = int(sh); n = int(os.environ.get("OSM_SHARDS", "8"))
+        print("MODE: OSM shard %d of %d" % (k, n))
+        rows = fetch_osm_shard(k, n)
+        with open("osm_part_%d.json" % k, "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, separators=(",", ":"))
+        print("wrote osm_part_%d.json with %d sites" % (k, len(rows)))
+        return
     osm_only = os.environ.get("HARVEST_OSM") == "1"
     if osm_only:
         # Weekly OSM job: refresh ONLY OpenStreetMap and keep every other source
