@@ -7,14 +7,16 @@ permissions:
   contents: write
 
 jobs:
-  # 8 jobs run at the same time, each taking every 8th tile of the world grid.
+  # 16 jobs run at the same time, each taking every 16th tile of the world grid.
+  # (Dense tiles now split into 4 sub-queries when Overpass times out, so each
+  #  shard does more work than before -- halve the tiles per shard to compensate.)
   shards:
     runs-on: ubuntu-latest
     timeout-minutes: 170
     strategy:
       fail-fast: false          # one bad shard must not kill the others
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,7 +27,7 @@ jobs:
       - name: Harvest OSM shard ${{ matrix.shard }}
         env:
           OSM_SHARD: ${{ matrix.shard }}
-          OSM_SHARDS: '8'
+          OSM_SHARDS: '16'
           OSM_BUDGET_MIN: '150'
         run: python harvest_projects.py
       - uses: actions/upload-artifact@v4
