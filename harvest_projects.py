@@ -373,7 +373,8 @@ def fetch_federal_register(days=45, per_page=100):
          "conditions[type][]": "NOTICE",
          "conditions[publication_date][gte]": since,
          "per_page": per_page, "order": "newest",
-         "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url"]}
+         "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url",
+                      "comments_close_on"]}
     # urlencode with repeated keys for the list fields
     parts = []
     for k, v in q.items():
@@ -407,6 +408,8 @@ def fetch_federal_register(days=45, per_page=100):
              "lat": round(lat, 5), "lng": round(lng, 5), "precise": precise,
              "size": "", "status": "In federal review (comment window may be open)",
              "company": "", "url": d.get("html_url"),
+             "date": _iso_date(d.get("publication_date")),
+             "deadline": _iso_date(d.get("comments_close_on")),
              "desc": "Federal environmental review notice (" + (d.get("publication_date") or "") +
                      "). " + note + " Open the notice for the exact "
                      "location and the public comment deadline.",
@@ -561,6 +564,7 @@ def fetch_permitstack(min_value=1000000, per_state_cap=500):
                 "lat": round(float(lat), 5), "lng": round(float(lng), 5),
                 "size": size, "status": "Permit on file",
                 "company": _ps_get(r, "contractor_name") or "", "url": "",
+                "date": _iso_date(_ps_get(r, "date_issued")),
                 "desc": ("Building permit" + (" \u00b7 " + addr if addr else "") +
                          (" \u00b7 issued " + str(_ps_get(r, "date_issued"))
                           if _ps_get(r, "date_issued") else "") + "."),
@@ -694,7 +698,8 @@ def fetch_public_land_nepa(days=60, per_page=100):
         q = {"conditions[type][]": "NOTICE",
              "conditions[publication_date][gte]": since,
              "per_page": per_page, "order": "newest",
-             "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url"]}
+             "fields[]": ["title", "abstract", "agencies", "publication_date", "html_url",
+                          "comments_close_on"]}
         if mode == "agency":
             q["conditions[agencies][]"] = val
         else:
@@ -736,6 +741,8 @@ def fetch_public_land_nepa(days=60, per_page=100):
                  "lat": round(lat, 5), "lng": round(lng, 5),
                  "size": "", "status": "Public land \u2014 " + label + " NEPA review",
                  "company": "", "url": d.get("html_url"),
+                 "date": _iso_date(d.get("publication_date")),
+                 "deadline": _iso_date(d.get("comments_close_on")),
                  "desc": (label + " action on public land (" +
                           (d.get("publication_date") or "") + "). " + place_note +
                           " Open the notice for the comment deadline."),
@@ -882,6 +889,7 @@ def fetch_world_bank(rows=1000):
                  "company": "World Bank",
                  "url": ("https://projects.worldbank.org/en/projects-operations/"
                          "project-detail/" + str(pr.get("id") or "")),
+                 "date": _iso_date(pr.get("boardapprovaldate")),
                  "desc": ("World Bank-financed project in " + str(cn) +
                           ((" \u00b7 " + size) if size else "") +
                           (". Located from title." if _precise else
@@ -1136,6 +1144,44 @@ _HUB_QUERIES = [
     ("bygglov", "bygglov"), ("rakennuslupa", "rakennus"),
     ("development permits", "permit"), ("zoning applications", "zoning"),
 ]
+
+# ---- significance gate for permit feeds -----------------------------------
+# A patio, re-roof or kitchen remodel on someone's home has no community or
+# environmental impact, and putting it on a public map is an intrusion into
+# private life rather than accountability. Keep permits that could plausibly
+# affect the surrounding community/environment: large money, or a project type
+# that is inherently significant.
+_TRIVIAL_RE = re.compile(
+    r"(remodel|interior|alteration|renovat|repair|re-?roof|roofing|patio|deck\b|"
+    r"fence|shed\b|garage|carport|driveway|swimming\s*pool|spa\b|hot\s*tub|"
+    r"water\s*heater|furnace|hvac|air\s*condition|plumbing|electrical\s*(?:permit|only)|"
+    r"\bsign\b|awning|window|siding|stucco|sprinkler|irrigation\s*system|"
+    r"kitchen|bathroom|basement|deck\s*addition|accessory\s*dwelling|\badu\b|"
+    r"mechanical|gas\s*line|water\s*line|fire\s*alarm|sprinkler\s*system|"
+    r"single\s*family\s*(?:residence|dwelling|addition)|sfr\b|res\s*addition|"
+    r"tenant\s*improvement|fit-?out|handrail|retaining\s*wall|solar\s*panel|"
+    r"reroof|demolition\s*of\s*(?:garage|shed|deck))", re.I)
+_SIGNIF_RE = re.compile(
+    r"(new\s*construction|new\s*building|commercial|industrial|multi-?family|"
+    r"apartment|condominium|subdivision|warehouse|distribution\s*cent|data\s*cent|"
+    r"hotel|mixed\s*use|tower|high-?rise|manufacturing|factory|plant\b|refinery|"
+    r"\bmine\b|mining|quarry|pipeline|substation|transmission|hospital|school|"
+    r"university|stadium|arena|shopping\s*cent|mall\b|retail\s*cent|office\s*building|"
+    r"parking\s*(?:structure|garage)|bridge|roadway|highway|rail|port\b|terminal|"
+    r"landfill|solar\s*(?:farm|field)|wind\s*farm|utility|infrastructure|"
+    r"master\s*plan|planned\s*(?:unit|development)|campus|logistics|storage\s*facility)", re.I)
+
+def _permit_is_significant(text, value, big=5000000, floor=1000000):
+    """Would this plausibly affect the surrounding community or environment?"""
+    t = str(text or "")
+    if value is not None and value >= big:
+        return True                       # very large spend: significant whatever it's called
+    if _TRIVIAL_RE.search(t):
+        return False                      # private / cosmetic work
+    if value is not None:
+        return value >= floor
+    return bool(_SIGNIF_RE.search(t))     # no value published: type must be significant
+
 def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
     ds = []; seen_ds = set()
     for q, kw in _HUB_QUERIES:
@@ -1199,22 +1245,26 @@ def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
                 for k, v in props.items():
                     if _HUB_VAL_RE.search(str(k)) and isinstance(v, (int, float)) and v > 0:
                         val = float(v); break
-                if val is not None:
-                    if val < min_value:
-                        continue
-                    size = "$%s" % format(int(val), ",")
-                else:
-                    # dataset exposes no cost field: still keep a capped sample
-                    if no_val_kept >= 40:
-                        continue
-                    no_val_kept += 1
-                    size = ""
                 nm = None
                 for k, v in props.items():
                     if _HUB_NAME_RE.search(str(k)) and isinstance(v, str) and v.strip():
                         nm = v; break
+                # judge on the permit's own words + value, so patios and re-roofs
+                # on private homes never reach the map
+                blob = " ".join([str(nm or ""), str(attrs.get("name") or "")])
+                if not _permit_is_significant(blob, val, floor=min_value):
+                    continue
+                if val is None:
+                    if no_val_kept >= 400: continue
+                    no_val_kept += 1
+                size = ("$%s" % format(int(val), ",")) if val else ""
+                _dt = None
+                for k, v in props.items():
+                    if re.search(r"(issue|appl|file|submit|date|created)", str(k), re.I):
+                        _dt = _iso_date(v)
+                        if _dt: break
                 p = {"name": str(nm or attrs.get("name") or "Permitted project")[:140],
-                     "type": "New construction", "state": "",
+                     "type": "New construction", "state": "", "date": _dt,
                      "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
                      "size": size,
                      "status": "Permit on file", "company": "",
@@ -1234,6 +1284,17 @@ def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
 # UK PlanIt -- national aggregator of UK planning applications (free, NO key).
 # GeoJSON API with real coordinates: a UK analogue to PermitStack.
 # ---------------------------------------------------------------------------
+_UK_TRIVIAL_RE = re.compile(
+    r"(signage|shopfront|shop\s*front|fascia|advertisement|extension|conservatory|"
+    r"garage|porch|dormer|loft\s*conversion|outbuilding|garden|fence|wall\b|gate\b|"
+    r"decking|patio|driveway|hardstanding|summer\s*house|shed\b|"
+    r"internal\s*alteration|wc\b|toilet|window|door|roof\s*light|rooflight|"
+    r"tree\s*works|fell|prune|pollard|hedge|crown\s*(?:lift|reduc|thin)|sales\s*board|advertisement\s*board|discharge\s*of\s*condition|"
+    r"non-?material\s*amendment|certificate\s*of\s*lawful|prior\s*approval\s*for\s*"
+    r"(?:larger|single)|change\s*of\s*use\s*of\s*(?:garage|outbuilding)|"
+    r"repair\s*works|replacement\s*of\s*(?:windows|doors|nets)|cricket|"
+    r"pole\b|cabinet|solar\s*panel|flue|boiler|satellite)", re.I)
+
 def fetch_ukplanit(days=90, pg_sz=200):
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     today = datetime.date.today().isoformat()
@@ -1260,7 +1321,7 @@ def fetch_ukplanit(days=90, pg_sz=200):
             if errs == 1: print("  uk planit tile error: %s" % e)
         time.sleep(0.4)
     print("  uk planit: %d applications across %d tiles (%d tile errors)" % (len(feats), len(tiles), errs))
-    out = []
+    out = []; skipped = 0
     for f in feats:
         try:
             geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
@@ -1270,11 +1331,26 @@ def fetch_ukplanit(days=90, pg_sz=200):
             desc = pr.get("description") or "Planning application"
             addr = pr.get("address") or ""
             state = pr.get("app_state") or ""
+            # PlanIt returns every application including householder work --
+            # extensions, signage, garden walls, tree consents. Keep only those
+            # that could plausibly affect the surrounding community/environment.
+            sz = str(pr.get("app_size") or "").strip().lower()
+            ty = str(pr.get("app_type") or "").strip().lower()
+            if ty in ("trees", "conditions", "amendment", "advertising", "heritage",
+                      "telecoms", "other"):
+                skipped += 1; continue
+            if sz == "small":                      # householder / minor works
+                skipped += 1; continue
+            if not sz and not _permit_is_significant(str(desc), None):
+                skipped += 1; continue
+            if _UK_TRIVIAL_RE.search(str(desc)):
+                skipped += 1; continue
             p = {"name": str(desc)[:140], "type": "Development (UK planning)",
                  "state": pr.get("authority_name") or "United Kingdom",
                  "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
                  "size": pr.get("app_size") or "", "status": state, "company": "",
                  "url": pr.get("link") or "https://planit.org.uk/",
+                 "date": _iso_date(pr.get("start_date") or pr.get("date_received")),
                  "desc": ("UK planning application" + ((" (" + state + ")") if state else "") +
                           ((" \u00b7 " + addr) if addr else "") + "."),
                  "source": "uk_planit"}
@@ -1282,7 +1358,8 @@ def fetch_ukplanit(days=90, pg_sz=200):
             out.append(p)
         except Exception:
             continue
-    print("  uk planit: %d large applications" % len(out))
+    print("  uk planit: %d significant applications (%d householder/minor skipped)"
+          % (len(out), skipped))
     return out
 
 
@@ -1416,6 +1493,8 @@ def fetch_epbc_au():
                  "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": not _au_approx,
                  "size": "", "status": status, "company": str(up.get("PROPONENT") or "")[:80],
                  "url": "https://epbcpublicportal.environment.gov.au/",
+                 "date": _iso_date(up.get("DATE") or up.get("REFERRAL_DATE")
+                                   or up.get("DATE_RECEIVED")),
                  "desc": ("Australian EPBC Act referral" + ((" \u00b7 " + ref) if ref else "") +
                           ((" \u00b7 " + status) if status else "") + ". Placed at the referral area centroid."),
                  "source": "epbc_au"}
@@ -1471,6 +1550,7 @@ def fetch_iaac_ca():
                  "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": not _approx,
                  "size": "", "status": status, "company": str(up.get("PROPONENT_EN") or "")[:80],
                  "url": str(up.get("PROJECT_URL_EN") or "https://iaac-aeic.gc.ca/050/evaluations"),
+                 "date": _iso_date(up.get("START_DATE") or up.get("UPDATED_AT")),
                  "desc": ("Canadian federal impact assessment" +
                           ((" \u00b7 " + status) if status else "") +
                           ". From the Impact Assessment Registry." + _note),
@@ -1526,18 +1606,88 @@ def _osm_existing():
     except Exception:
         return []
 
+
+_OVERPASS_EPS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+]
+def _overpass(q, label=""):
+    """POST an Overpass query, trying each mirror. Returns parsed JSON or None."""
+    for i, ep in enumerate(_OVERPASS_EPS):
+        try:
+            req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
+                                         headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except Exception as ex:
+            if i == len(_OVERPASS_EPS) - 1:
+                print("  osm %s failed on all mirrors: %s" % (label, str(ex)[:60]))
+            time.sleep(1.5)
+    return None
+
+def _quarters(s, w, n, e):
+    ms, mw = (s + n) / 2.0, (w + e) / 2.0
+    return [(s, w, ms, mw), (s, mw, ms, e), (ms, w, n, mw), (ms, mw, n, e)]
+
+def _osm_query(s, w, n, e, cap):
+    bb = "%s,%s,%s,%s" % (s, w, n, e)
+    return ('[out:json][timeout:180];('
+            'way["landuse"="construction"](%s)(if:length()>400);'
+            'way["highway"="construction"](%s)(if:length()>800);'
+            'way["railway"="construction"](%s)(if:length()>800);'
+            'way["building"="construction"](%s)(if:length()>250);'
+            'way["landuse"="quarry"](%s)(if:length()>600);'
+            'way["man_made"="pipeline"]["construction"](%s);'
+            'way["power"="plant"]["construction"](%s);'
+            'way["waterway"="dam"]["construction"](%s);'
+            'relation["landuse"="construction"](%s);'
+            ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
+
+def _osm_collect(data, label, out):
+    for el in (data.get("elements") or []):
+        try:
+            c = el.get("center") or {}
+            lat = c.get("lat", el.get("lat")); lng = c.get("lon", el.get("lon"))
+            if lat is None or lng is None: continue
+            tg = el.get("tags") or {}
+            nm = tg.get("name") or tg.get("operator") or ""
+            kind = ("Road under construction" if tg.get("highway") else
+                    "Railway under construction" if tg.get("railway") else
+                    "Building under construction" if tg.get("building") else
+                    "Quarry / extraction site" if tg.get("landuse") == "quarry" else
+                    "Pipeline under construction" if tg.get("man_made") == "pipeline" else
+                    "Power plant under construction" if tg.get("power") == "plant" else
+                    "Dam under construction" if tg.get("waterway") == "dam" else
+                    "Construction site")
+            p = {"name": (nm or kind)[:140], "type": kind, "state": "",
+                 "lat": round(float(lat), 5), "lng": round(float(lng), 5),
+                 "precise": True, "size": "", "status": "Under construction",
+                 "company": tg.get("operator") or "",
+                 "url": "https://www.openstreetmap.org/way/" + str(el.get("id") or ""),
+                 "desc": kind + " mapped in OpenStreetMap (ODbL).",
+                 "source": "osm_construction"}
+            p["impact"] = rate_project(p, sensitivity=0)
+            out.append(p)
+        except Exception:
+            continue
+
 def fetch_osm_construction(cap=3000, tiles_per_run=170):
     ep = "https://overpass-api.de/api/interpreter"
     grid = _osm_tiles()
-    # rotate through the grid so every tile is refreshed over a few days
+    # STRIDE across the grid, don't take a contiguous slice: the grid is ordered by
+    # region, so a contiguous slice = one continent (this made every run US-only and
+    # drew visible boxes). Striding spreads each run's tiles across the whole world.
     day = datetime.date.today().toordinal()
-    nslice = max(1, tiles_per_run)
-    starti = (day * nslice) % max(1, len(grid))
-    todo = [grid[(starti + i) % len(grid)] for i in range(min(nslice, len(grid)))]
-    print("  osm: grid of %d tiles; this run does %d (rotating)" % (len(grid), len(todo)))
+    nslice = max(1, min(tiles_per_run, len(grid)))
+    stride = max(1, len(grid) // nslice)
+    offset = day % stride
+    todo = [grid[i] for i in range(offset, len(grid), stride)][:nslice]
+    print("  osm: grid of %d tiles; this run does %d, strided every %d (offset %d) "
+          "-> spread worldwide" % (len(grid), len(todo), stride, offset))
     out = _osm_existing()
     print("  osm: carried %d sites forward from previous runs" % len(out))
-    ok_boxes = 0
+    ok_boxes = 0; timeouts = 0
     for (s, w, n, e) in todo:
         label = "%.0f,%.0f" % (s, w)
         bb = "%s,%s,%s,%s" % (s, w, n, e)
@@ -1557,13 +1707,22 @@ def fetch_osm_construction(cap=3000, tiles_per_run=170):
              'way["waterway"="dam"]["construction"](%s);'
              'relation["landuse"="construction"](%s);'
              ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
-        try:
-            req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
-                                         headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=120) as r:
-                data = json.loads(r.read().decode("utf-8", "replace"))
-        except Exception as ex:
-            print("  osm %s failed: %s" % (label, ex)); continue
+        data = _overpass(q, label)
+        if data is None:
+            # A 504 means the tile was too heavy for the server, not that it is
+            # empty. Split it into quarters and retry -- otherwise dense areas
+            # (Europe, East Asia) would time out forever and stay blank.
+            hit = False
+            for (qs, qw, qn, qe) in _quarters(s, w, n, e):
+                sub = _osm_query(qs, qw, qn, qe, cap)
+                d2 = _overpass(sub, label + "/q")
+                if d2 is not None:
+                    hit = True
+                    _osm_collect(d2, label, out)
+                time.sleep(1.0)
+            if hit: ok_boxes += 1
+            else: timeouts += 1
+            continue
         ok_boxes += 1
         for el in (data.get("elements") or []):
             try:
@@ -1601,8 +1760,8 @@ def fetch_osm_construction(cap=3000, tiles_per_run=170):
         k = (round(q.get("lat", 0), 4), round(q.get("lng", 0), 4))
         if k in seen: continue
         seen.add(k); merged.append(q)
-    print("  osm construction: %d sites total (%d/%d tiles queried this run)"
-          % (len(merged), ok_boxes, len(todo)))
+    print("  osm construction: %d sites total (%d/%d tiles ok, %d still timed out)"
+          % (len(merged), ok_boxes, len(todo), timeouts))
     return merged
 
 
@@ -1668,6 +1827,7 @@ def _ibama_national(csvs, max_rows=1500):
                  "lng": round(_BR_CENTER[1] + ((jit * 1.7) % 9.0) - 4.5, 4),
                  "precise": False, "size": "",
                  "status": str(row.get(c_lic) or "")[:60], "company": "",
+                 "date": _iso_date(row.get(c_dat)),
                  "url": "https://dadosabertos.ibama.gov.br/dataset/"
                         "licencas-ambientais-de-atividades-e-empreendimentos-licenciados-pelo-ibama",
                  "desc": ("Brazilian federal environmental licence (IBAMA)" +
@@ -1746,6 +1906,7 @@ def fetch_ibama_br(max_rows=4000):
                  "lat": round(float(lat), 5), "lng": round(float(lng), 5),
                  "precise": precise, "size": "",
                  "status": str(row.get(c_lic) or "")[:60], "company": "",
+                 "date": _iso_date(row.get(_sniff_col(cols, "emissao", "dat_emissao"))),
                  "url": "https://dadosabertos.ibama.gov.br/dataset/" + ds,
                  "desc": ("Brazilian federal environmental licence (IBAMA)" +
                           ((" \u00b7 " + str(row.get(c_lic))) if c_lic and row.get(c_lic) else "") +
@@ -1858,6 +2019,7 @@ def fetch_sitadel_fr(max_rows=3000, months=6):
                  "size": ("%d m\u00b2" % int(srf)) if srf else "",
                  "status": "Permit granted", "company": "",
                  "url": "https://www.data.gouv.fr/datasets/" + slug,
+                 "date": _iso_date(row.get(c_dat)) if c_dat else None,
                  "desc": ("French development permit (Sitadel, SDES)" +
                           ((" \u00b7 " + nat) if nat else "") +
                           ". Placed at the commune centroid (" + cname + ")."),
@@ -1966,6 +2128,32 @@ def fetch_parivesh_in(per=1000, max_rows=3000):
     return out
 
 
+
+def _iso_date(v):
+    """Normalise a date from any source to YYYY-MM-DD, or None."""
+    if v in (None, ""): return None
+    s = str(v).strip()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m: return m.group(0)
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", s)          # dd/mm/yyyy or mm/dd/yyyy
+    if m:
+        d, mo, y = m.group(1), m.group(2), m.group(3)
+        try:
+            if int(mo) > 12: d, mo = mo, d
+            return "%s-%s-%s" % (y, mo.zfill(2), d.zfill(2))
+        except Exception: return None
+    if re.fullmatch(r"\d{8}", s):                          # yyyymmdd, exactly 8 digits
+        return "%s-%s-%s" % (s[:4], s[4:6], s[6:8])
+    try:                                                   # epoch seconds/millis (ArcGIS)
+        n = float(s)
+        if n > 1e11:
+            return datetime.datetime.utcfromtimestamp(n / 1000.0).date().isoformat()
+        if n > 1e8:
+            return datetime.datetime.utcfromtimestamp(n).date().isoformat()
+    except Exception:
+        pass
+    return None
+
 def _slim(p):
     """Trim each project for wire size: drop empty fields, round coords to ~11m,
     cap prose. 20k+ projects make every byte count for map load time."""
@@ -1976,8 +2164,12 @@ def _slim(p):
             try: q[k] = round(float(v), 4)
             except Exception: pass
             continue
+        if k in ("date", "deadline"):
+            q[k] = str(v)[:10]; continue
         if k == "desc":
-            q[k] = str(v)[:170]; continue
+            q[k] = str(v)[:95]; continue
+        if k == "precise" and v is True:
+            continue                       # precise is the default; only mark exceptions
         if k in ("mw",): continue
         q[k] = v
     return q
@@ -2088,7 +2280,14 @@ def main():
     items += _run("ibama_br", fetch_ibama_br)                   # Brazil federal environmental licences
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
-    items += _run("osm_construction", fetch_osm_construction)  # GLOBAL: sites under construction
+    # OSM is the slow one (hundreds of Overpass tiles). It runs on its own weekly
+    # schedule; on daily runs its previous results are carried through untouched.
+    if os.environ.get("HARVEST_OSM") == "1":
+        items += _run("osm_construction", fetch_osm_construction)
+    else:
+        _keep = _osm_existing()
+        print("  osm_construction: skipped (weekly job) -- carried %d forward" % len(_keep))
+        items += _keep
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
     items.sort(key=lambda p: -(p.get("impact") or 0))
@@ -2103,12 +2302,15 @@ def main():
             old_by, new_by = defaultdict(list), defaultdict(list)
             for q in exl: old_by[q.get("source", "")].append(q)
             for q in items: new_by[q.get("source", "")].append(q)
+            # Only preserve on a TOTAL failure (zero rows). A source that returns
+            # fewer rows may simply have been filtered more strictly -- restoring
+            # the old rows there would silently undo intentional filtering.
             for src, oldrows in old_by.items():
                 new_n = len(new_by.get(src, []))
-                if len(oldrows) >= 10 and new_n < len(oldrows) * 0.5:
+                if len(oldrows) >= 10 and new_n == 0:
                     items = [q for q in items if q.get("source") != src] + oldrows
-                    print("  [preserve] %s came back thin (%d < %d) -- kept prior entries"
-                          % (src or "(none)", new_n, len(oldrows)))
+                    print("  [preserve] %s returned nothing (had %d) -- kept prior entries"
+                          % (src or "(none)", len(oldrows)))
         except Exception as e:
             print("  [preserve] skipped: %s" % e)
 

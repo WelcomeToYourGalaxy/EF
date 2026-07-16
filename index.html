@@ -256,6 +256,14 @@
 .psrc-l{font-weight:600;} .psrc-n{color:#7f95bd;font-weight:400;}
 .psrc-d{display:block;color:#8aa0c8;margin-left:18px;font-size:9.5px;}
 .hl-sec{display:inline-block;margin-top:2px;color:#e6c079;}
+.proj-search{margin:5px 0 2px 22px;max-width:236px;display:flex;align-items:center;gap:6px;}
+.proj-search input{flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.16);border-radius:5px;color:#dbe6fb;font-size:10.5px;padding:3px 6px;outline:none;}
+.proj-search input:focus{border-color:rgba(120,200,150,0.6);}
+#projQn{font-size:9.5px;color:#8aa0c8;white-space:nowrap;}
+.pj-dl{font-size:10px;border-radius:4px;padding:2px 5px;margin:0 0 5px;display:inline-block;}
+.pj-dl.open{color:#7fe0a2;background:rgba(80,200,130,0.12);border:1px solid rgba(80,200,130,0.45);}
+.pj-dl.shut{color:#9aa8bd;background:rgba(154,168,189,0.10);border:1px solid rgba(154,168,189,0.3);}
+.pj-date{color:#9fb4d8;}
 .approx-badge{font-size:10px;color:#e6c079;background:rgba(230,192,121,0.12);border:1px dashed rgba(230,192,121,0.5);border-radius:4px;padding:2px 5px;margin:0 0 5px;display:inline-block;}</style>
 </head>
 <body>
@@ -354,6 +362,7 @@
   <label class="f-status"><input type="checkbox" id="histToggle" checked> Show dormant / defunct</label>
   <label class="f-status"><input type="checkbox" id="projChk" checked> 🔥 Live projects to resist</label>
   <div class="proj-note">Live projects = building permits filed in the <b>last 30 days</b>. Typical build time — homes 6–12 mo · commercial &amp; multifamily 12–18 mo · large developments 2–5 yr — so almost none finish within 30 days; a fresh permit marks a project just getting underway.</div>
+  <div class="proj-search"><input id="projQ" type="search" placeholder="Search projects by name\u2026" autocomplete="off"><span id="projQn"></span></div>
   <div id="projSrcBox" class="proj-src-box"></div>
 </div>
 <div id="gbCrumb"></div>
@@ -1376,6 +1385,12 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     {k:"ejatlas",cat:"\ud83c\udf0d Global",label:"Environmental-justice conflicts",
      desc:"Community fights against harmful projects worldwide, documented by the Environmental Justice Atlas."}
   ];
+  function pjAge(d){ try{ var n=Math.floor((new Date()-new Date(d))/86400000);
+    if(isNaN(n)||n<0) return "";
+    if(n<=7) return " \u00b7 new this week";
+    if(n<=30) return " \u00b7 "+n+" days ago";
+    if(n<=365) return " \u00b7 "+Math.round(n/30)+" months ago";
+    return " \u00b7 "+(n/365).toFixed(1)+" years ago"; }catch(e){ return ""; } }
   function pjSrcGroup(s){ s=s||"";
     if(s.indexOf("socrata")===0) return "socrata";
     if(s.indexOf("ckan_")===0) return "ckan";
@@ -1387,7 +1402,11 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     var counts={}; ((pjData&&pjData.projects)||[]).forEach(function(p){ var g=pjSrcGroup(p.source); counts[g]=(counts[g]||0)+1; });
     var h='<div class="psrc-head" onclick="this.parentNode.classList.toggle(\'open\')"><span>Filter by data source</span><span class="psrc-tog">\u25be</span></div><div class="psrc-body">';
     var lastCat=null;
-    PJ_SRC.forEach(function(s){ if(!counts[s.k]) return;
+    var ordered=PJ_SRC.slice().sort(function(a,b){
+      if(a.cat!==b.cat) return PJ_SRC.indexOf(a)-PJ_SRC.indexOf(b);
+      return (counts[b.k]||0)-(counts[a.k]||0);
+    });
+    ordered.forEach(function(s){ if(!counts[s.k]) return;
       if(s.cat!==lastCat){ h+='<div class="psrc-cat">'+s.cat+'</div>'; lastCat=s.cat; }
       h+='<label class="psrc-row"><input type="checkbox" data-src="'+s.k+'" checked> <span class="psrc-l">'+s.label+' <span class="psrc-n">'+counts[s.k]+'</span></span><span class="psrc-d">'+s.desc+'</span></label>';
     });
@@ -1412,12 +1431,16 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
       +'<circle cx="12" cy="12" r="4" fill="#ffffff"/></svg>';
     return L.divIcon({html:svg,className:"pjm-pin",iconSize:[s,hh],iconAnchor:[s/2,hh],popupAnchor:[0,-hh+5]});
   }
+  var pjQ="";
   function pjRender(){
+    var shown=0;
     if(pjLayer){ try{ map.removeLayer(pjLayer); }catch(e){} }
     pjLayer = L.layerGroup();
     ((pjData&&pjData.projects)||[]).forEach(function(p){
       if(p.lat==null||p.lng==null) return;
       if(!activeProjSrc.has(pjSrcGroup(p.source))) return;
+      if(pjQ && (((p.name||"")+" "+(p.type||"")+" "+(p.state||"")).toLowerCase().indexOf(pjQ)<0)) return;
+      shown++;
       var i=p.impact||1, c=PC[i]||"#3fa66a";
       var r=i>=5?7:i>=4?6:i>=3?5:i>=2?4.5:4;
       var m = (p.precise===false)
@@ -1429,9 +1452,18 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
       m.on('click', function(){
         if(this._popup) return;
         var q=this.__p;
+        var dl='';
+        if(q.deadline){
+          var dd=Math.ceil((new Date(q.deadline)-new Date())/86400000);
+          dl = (dd>=0)
+            ? '<div class="pj-dl open">\u23f3 Comments close '+q.deadline+' \u2014 '+(dd===0?'today':dd+' day'+(dd===1?'':'s')+' left')+'</div>'
+            : '<div class="pj-dl shut">Comment window closed '+q.deadline+'</div>';
+        }
         var html='<div class="pjm-pop">'
           +(q.precise===false?'<div class="approx-badge">\u2248 Approximate \u2014 area/region level; open source for exact site</div>':'')
+          +dl
           +'<b>'+(q.name||'Project')+'</b><br><span class="t">'+(q.type||'project')+'</span>'+(q.state||'')
+          +(q.date?'<div class="d pj-date">Filed / dated '+q.date+pjAge(q.date)+'</div>':'')
           +(q.company?' \u00b7 '+q.company:'')
           +'<div class="d">'+(q.desc||'')+'</div>'
           +(q.size?'<div class="d">Scale: '+q.size+(q.status?' \u00b7 '+q.status:'')+'</div>':'')
@@ -1442,8 +1474,16 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
       pjLayer.addLayer(m);
     });
     if(pjOn && typeof map!=='undefined'){ pjLayer.addTo(map); }
+    try{ var qn=document.getElementById('projQn'); if(qn) qn.textContent = pjQ? (shown+' match'+(shown===1?'':'es')) : ''; }catch(_e){}
     try{ pjBuildSrcUI(); }catch(_e){}
   }
+  (function(){ var t=null;
+    document.addEventListener("input", function(ev){
+      if(!ev.target || ev.target.id!=="projQ") return;
+      clearTimeout(t); var v=ev.target.value.trim().toLowerCase();
+      t=setTimeout(function(){ pjQ=v; pjRender(); }, 220);
+    });
+  })();
   function pjLoad(){ fetch('projects.json?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.ok?r.json():Promise.reject();}).then(function(d){pjData=d;pjRender();}).catch(function(){pjData=PJ_SEED;pjRender();}); }
   function pjShow(){ pjOn=true; if(!pjData){pjLoad();} else if(pjLayer){pjLayer.addTo(map);} var b=document.getElementById('projChk'); if(b)b.checked=true; }
   function pjHide(){ pjOn=false; if(pjLayer)pjLayer.remove(); var b=document.getElementById('projChk'); if(b)b.checked=false; }
