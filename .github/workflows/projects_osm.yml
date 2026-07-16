@@ -1,33 +1,70 @@
-name: Harvest OSM construction (weekly)
+name: Harvest OSM construction (sharded)
 on:
   schedule:
-    - cron: '0 3 * * 0,3'     # Sun + Wed 03:00 UTC -> full 817-tile sweep each week
+    - cron: '0 3 * * 0'       # Sundays 03:00 UTC -- full 817-tile global sweep
   workflow_dispatch: {}
 permissions:
   contents: write
+
 jobs:
-  harvest:
+  # 8 jobs run at the same time, each taking every 8th tile of the world grid.
+  shards:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false          # one bad shard must not kill the others
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install deps
-        run: pip install permitstack requests
-      - name: Harvest projects.json (with OSM)
+        run: pip install requests
+      - name: Harvest OSM shard ${{ matrix.shard }}
         env:
-          PERMITSTACK_API_KEY: ${{ secrets.PERMITSTACK_API_KEY }}
-          HARVEST_OSM: '1'
+          OSM_SHARD: ${{ matrix.shard }}
+          OSM_SHARDS: '8'
+          OSM_BUDGET_MIN: '150'
         run: python harvest_projects.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: osm-part-${{ matrix.shard }}
+          path: osm_part_*.json
+          if-no-files-found: warn
+          retention-days: 2
+
+  # once every shard finishes, fold them into projects.json and commit ONCE
+  merge:
+    needs: shards
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install requests
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: osm-part-*
+          merge-multiple: true
+      - name: Merge shards into projects.json
+        env:
+          OSM_MERGE: '1'
+        run: |
+          ls -la osm_part_*.json || echo "no parts downloaded"
+          python harvest_projects.py
       - name: Commit if changed
         run: |
           git config user.name  "projects-bot"
           git config user.email "actions@users.noreply.github.com"
           git add projects.json
           if git diff --staged --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "chore: refresh projects.json (weekly, incl. OSM)"
+          git commit -m "chore: refresh projects.json (OSM sweep, 8 shards)"
           BR="$(git rev-parse --abbrev-ref HEAD)"
           for i in 1 2 3 4 5; do
             git fetch origin "$BR" || true
