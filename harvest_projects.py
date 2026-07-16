@@ -2264,32 +2264,8 @@ def fetch_ckan_federation(per_portal=3, per_ds=1500):
     print("  ckan federation: %d points from %d portals" % (len(out), len(_CKAN_PORTALS)))
     return out
 
-def main():
-    items = []
-    items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
-    _SOCRATA_OFF = {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org"}  # 400s; PermitStack covers these
-    items += _run("ckan_federation", fetch_ckan_federation)     # national CKAN portals worldwide
-    items += _run("arcgis_hub", fetch_arcgis_hub)               # US city/county permits (no cap)
-    items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
-                                              if cfg.get("domain") not in _SOCRATA_OFF
-                                              for p in fetch_socrata(cfg)])
-    items += _run("federal_register", fetch_federal_register)   # US EIS notices
-    items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
-    items += _run("sitadel_fr", fetch_sitadel_fr)               # France national permits (automated)
-    items += _run("uk_planit", fetch_ukplanit)                  # UK national planning applications
-    items += _run("epbc_au", fetch_epbc_au)                     # Australia national environmental referrals
-    items += _run("iaac_ca", fetch_iaac_ca)                     # Canada federal impact assessments
-    items += _run("ibama_br", fetch_ibama_br)                   # Brazil federal environmental licences
-    items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
-    items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
-    # OSM is the slow one (hundreds of Overpass tiles). It runs on its own weekly
-    # schedule; on daily runs its previous results are carried through untouched.
-    if os.environ.get("HARVEST_OSM") == "1":
-        items += _run("osm_construction", fetch_osm_construction)
-    else:
-        _keep = _osm_existing()
-        print("  osm_construction: skipped (weekly job) -- carried %d forward" % len(_keep))
-        items += _keep
+
+def _finish(items):
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
     items.sort(key=lambda p: -(p.get("impact") or 0))
@@ -2338,6 +2314,51 @@ def main():
     if not items:
         print("NOTE: no sources wired yet -- fill SOCRATA_CITIES and uncomment a "
               "fetcher. The map falls back to its embedded seed set until then.")
+
+
+
+def _carry_sources(pred, label):
+    """Reuse entries already in projects.json for sources this run isn't refreshing."""
+    try:
+        ex = json.load(open("projects.json", encoding="utf-8"))
+        rows = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
+    except Exception:
+        rows = []
+    keep = [q for q in rows if pred(str(q.get("source") or ""))]
+    print("  [%s] carried %d entries forward (not refreshed this run)" % (label, len(keep)))
+    return keep
+
+def main():
+    osm_only = os.environ.get("HARVEST_OSM") == "1"
+    if osm_only:
+        # Weekly OSM job: refresh ONLY OpenStreetMap and keep every other source
+        # exactly as the daily job last wrote it. Running the full harvest here too
+        # would double-spend PermitStack's 100/day budget on OSM days.
+        print("MODE: OSM-only refresh (weekly job)")
+        items = _run("osm_construction", fetch_osm_construction)
+        items += _carry_sources(lambda s: s != "osm_construction", "daily sources")
+        _finish(items)
+        return
+    print("MODE: daily refresh (all sources except OSM)")
+    items = []
+    items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
+    _SOCRATA_OFF = {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org"}  # 400s; PermitStack covers these
+    items += _run("ckan_federation", fetch_ckan_federation)     # national CKAN portals worldwide
+    items += _run("arcgis_hub", fetch_arcgis_hub)               # US city/county permits (no cap)
+    items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
+                                              if cfg.get("domain") not in _SOCRATA_OFF
+                                              for p in fetch_socrata(cfg)])
+    items += _run("federal_register", fetch_federal_register)   # US EIS notices
+    items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
+    items += _run("sitadel_fr", fetch_sitadel_fr)               # France national permits (automated)
+    items += _run("uk_planit", fetch_ukplanit)                  # UK national planning applications
+    items += _run("epbc_au", fetch_epbc_au)                     # Australia national environmental referrals
+    items += _run("iaac_ca", fetch_iaac_ca)                     # Canada federal impact assessments
+    items += _run("ibama_br", fetch_ibama_br)                   # Brazil federal environmental licences
+    items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
+    items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
+    items += _carry_sources(lambda s: s == "osm_construction", "osm_construction")
+    _finish(items)
 
 if __name__ == "__main__":
     main()
