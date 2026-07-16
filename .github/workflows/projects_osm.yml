@@ -1,14 +1,14 @@
 name: Harvest OSM construction (weekly)
 on:
   schedule:
-    - cron: '0 3 * * 0'       # Sundays 03:00 UTC
+    - cron: '0 3 * * 0,3'     # Sun + Wed 03:00 UTC -> full 817-tile sweep each week
   workflow_dispatch: {}
 permissions:
   contents: write
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
