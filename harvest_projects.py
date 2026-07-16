@@ -1672,16 +1672,18 @@ def _osm_collect(data, label, out):
         except Exception:
             continue
 
-def fetch_osm_construction(cap=3000, tiles_per_run=170):
+def fetch_osm_construction(cap=3000, tiles_per_run=410):
     ep = "https://overpass-api.de/api/interpreter"
     grid = _osm_tiles()
     # STRIDE across the grid, don't take a contiguous slice: the grid is ordered by
     # region, so a contiguous slice = one continent (this made every run US-only and
     # drew visible boxes). Striding spreads each run's tiles across the whole world.
-    day = datetime.date.today().toordinal()
     nslice = max(1, min(tiles_per_run, len(grid)))
     stride = max(1, len(grid) // nslice)
-    offset = day % stride
+    # advance the offset by RUN INDEX (weeks*2), not calendar day: the OSM job runs
+    # twice a week, so a day-based offset would skip parts of the grid entirely.
+    run_ix = datetime.date.today().toordinal() // 3
+    offset = run_ix % stride
     todo = [grid[i] for i in range(offset, len(grid), stride)][:nslice]
     print("  osm: grid of %d tiles; this run does %d, strided every %d (offset %d) "
           "-> spread worldwide" % (len(grid), len(todo), stride, offset))
