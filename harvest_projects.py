@@ -1639,12 +1639,13 @@ def _osm_query(s, w, n, e, cap):
             'way["highway"="construction"](%s)(if:length()>800);'
             'way["railway"="construction"](%s)(if:length()>800);'
             'way["building"="construction"](%s)(if:length()>250);'
-            'way["landuse"="quarry"](%s)(if:length()>600);'
+            'way["landuse"="quarry"]["construction"](%s);'
+            'way["proposed:landuse"="quarry"](%s);'
             'way["man_made"="pipeline"]["construction"](%s);'
             'way["power"="plant"]["construction"](%s);'
             'way["waterway"="dam"]["construction"](%s);'
             'relation["landuse"="construction"](%s);'
-            ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
+            ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
 
 def _osm_collect(data, label, out):
     for el in (data.get("elements") or []):
@@ -1657,7 +1658,8 @@ def _osm_collect(data, label, out):
             kind = ("Road under construction" if tg.get("highway") else
                     "Railway under construction" if tg.get("railway") else
                     "Building under construction" if tg.get("building") else
-                    "Quarry / extraction site" if tg.get("landuse") == "quarry" else
+                    "New quarry / extraction site" if (tg.get("landuse") == "quarry"
+                        or tg.get("proposed:landuse") == "quarry") else
                     "Pipeline under construction" if tg.get("man_made") == "pipeline" else
                     "Power plant under construction" if tg.get("power") == "plant" else
                     "Dam under construction" if tg.get("waterway") == "dam" else
