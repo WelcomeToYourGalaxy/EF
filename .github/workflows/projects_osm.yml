@@ -1,0 +1,40 @@
+name: Harvest OSM construction (weekly)
+on:
+  schedule:
+    - cron: '0 3 * * 0'       # Sundays 03:00 UTC
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install permitstack requests
+      - name: Harvest projects.json (with OSM)
+        env:
+          PERMITSTACK_API_KEY: ${{ secrets.PERMITSTACK_API_KEY }}
+          HARVEST_OSM: '1'
+        run: python harvest_projects.py
+      - name: Commit if changed
+        run: |
+          git config user.name  "projects-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add projects.json
+          if git diff --staged --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "chore: refresh projects.json (weekly, incl. OSM)"
+          BR="$(git rev-parse --abbrev-ref HEAD)"
+          for i in 1 2 3 4 5; do
+            git fetch origin "$BR" || true
+            if git merge -X ours FETCH_HEAD -m "merge remote; keep fresh projects.json" && git push origin HEAD:"$BR"; then
+              echo "pushed"; exit 0
+            fi
+            git merge --abort 2>/dev/null || true
+            echo "push race, retry $i"; sleep 6
+          done
+          echo "push failed after retries"; exit 1
