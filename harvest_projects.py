@@ -1574,27 +1574,26 @@ def fetch_iaac_ca():
 # world is split into small tiles instead. Each run works through a rotating
 # slice of the grid and MERGES with what previous runs already found, so
 # coverage accumulates instead of being capped.
-_OSM_REGIONS = [
-    (24.0, -125.0, 49.5, -66.0), (49.0, -141.0, 60.0, -52.0),
-    (14.0, -118.0, 33.0, -86.0), (-56.0, -82.0, 13.0, -34.0),
-    (36.0, -10.0, 60.0, 30.0), (50.0, 20.0, 70.0, 60.0),
-    (-35.0, -18.0, 15.0, 52.0), (15.0, 25.0, 42.0, 63.0),
-    (5.0, 60.0, 37.0, 92.0), (18.0, 92.0, 54.0, 135.0),
-    (-11.0, 95.0, 22.0, 141.0), (-44.0, 112.0, -10.0, 154.0),
-    (-48.0, 166.0, -34.0, 179.0),
-]
+# The world, gridded. Earlier this was a list of hand-drawn region boxes, which is
+# how Sochi, Reykjavik, Alaska and the whole of Siberia ended up unqueried: every
+# box edge is a chance to miss somewhere. Covering the globe outright removes the
+# guesswork -- ocean tiles cost almost nothing (Overpass answers them instantly)
+# and no inhabited place can fall through a seam again.
+_OSM_LAT_MIN, _OSM_LAT_MAX = -60.0, 84.0     # Antarctic ice / high Arctic have no construction
+_OSM_LNG_MIN, _OSM_LNG_MAX = -180.0, 180.0
+
 def _osm_tiles(step=5.0):
-    """Split the world's populated regions into ~5-degree tiles (~550km)."""
+    """Every 5-degree tile on Earth between 60S and 84N. ~2,088 tiles."""
     out = []
-    for (s, w, n, e) in _OSM_REGIONS:
-        la = s
-        while la < n:
-            lo = w
-            while lo < e:
-                out.append((round(la, 2), round(lo, 2),
-                            round(min(la + step, n), 2), round(min(lo + step, e), 2)))
-                lo += step
-            la += step
+    la = _OSM_LAT_MIN
+    while la < _OSM_LAT_MAX:
+        lo = _OSM_LNG_MIN
+        while lo < _OSM_LNG_MAX:
+            out.append((round(la, 2), round(lo, 2),
+                        round(min(la + step, _OSM_LAT_MAX), 2),
+                        round(min(lo + step, _OSM_LNG_MAX), 2)))
+            lo += step
+        la += step
     return out
 
 def _osm_existing():
@@ -1621,7 +1620,19 @@ def _overpass(q, label="", deadline=None):
             req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
                                          headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=75) as r:
-                return json.loads(r.read().decode("utf-8", "replace"))
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            # Overpass answers HTTP 200 with an EMPTY elements list and a "remark"
+            # when the query times out or errors server-side. Treating that as a
+            # success is what left box-shaped holes (Montana, Nevada, Portugal,
+            # Spain...) -- the tile was recorded "ok, 0 sites" and never split.
+            rm = str((data or {}).get("remark") or "")
+            if rm and ("timed out" in rm.lower() or "error" in rm.lower()
+                       or "out of memory" in rm.lower()):
+                if i == len(_OVERPASS_EPS) - 1:
+                    print("  osm %s server-side timeout -> will split: %s" % (label, rm[:60]))
+                time.sleep(1.0)
+                continue                      # next mirror; then the caller splits
+            return data
         except Exception as ex:
             if i == len(_OVERPASS_EPS) - 1:
                 print("  osm %s failed on all mirrors: %s" % (label, str(ex)[:50]))
@@ -1713,7 +1724,7 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
              'way["highway"="construction"](%s)(if:length()>800);'
              'way["railway"="construction"](%s)(if:length()>800);'
              'way["building"="construction"](%s)(if:length()>250);'
-             'way["landuse"="quarry"](%s)(if:length()>600);'
+             'way["landuse"="quarry"]["construction"](%s);'
              'way["man_made"="pipeline"]["construction"](%s);'
              'way["power"="plant"]["construction"](%s);'
              'way["waterway"="dam"]["construction"](%s);'
@@ -2370,11 +2381,20 @@ def fetch_osm_shard(k, n, cap=3000):
     return out
 
 def _osm_merge_parts():
-    """Merge every osm_part_*.json produced by the shard jobs into projects.json."""
+    """Merge every osm_part_*.json produced by the shard jobs into projects.json.
+
+    Prior OSM entries are kept ONLY for tiles no shard covered this run. Keeping
+    prior data for tiles that WERE refreshed would resurrect exactly what the
+    current filters exclude (that is how 73k stale quarries survived a run that
+    no longer collects them)."""
     import glob as _glob
     parts = sorted(_glob.glob("osm_part_*.json"))
-    fresh = []
+    nsh = int(os.environ.get("OSM_SHARDS", "16"))
+    grid = _osm_tiles()
+    fresh = []; done_shards = set()
     for f in parts:
+        m = re.search(r"osm_part_(\d+)\.json$", f)
+        if m: done_shards.add(int(m.group(1)))
         try:
             rows = json.load(open(f, encoding="utf-8"))
             fresh += rows if isinstance(rows, list) else []
@@ -2383,16 +2403,37 @@ def _osm_merge_parts():
             print("  merge: %s unreadable: %s" % (f, ex))
     if not parts:
         print("  merge: no osm_part_*.json found -- nothing to merge"); return
+
     keep = _carry_sources(lambda s: s != "osm_construction", "daily sources")
     prior = _carry_sources(lambda s: s == "osm_construction", "prior osm")
-    if not fresh:
-        # every shard came back empty (Overpass outage): keep what we already had
-        print("  merge: all shards empty -- keeping %d prior OSM sites" % len(prior))
-        _finish(keep + prior); return
-    # fresh FIRST so dedup prefers it, prior second so any region whose shard failed
-    # keeps its previous coverage instead of being silently wiped.
-    print("  merge: %d fresh OSM sites from %d shard(s) + %d prior retained where a "
-          "shard produced nothing" % (len(fresh), len(parts), len(prior)))
+
+    # tiles that a shard actually covered this run -> their data is authoritative
+    covered = [grid[i] for i in range(len(grid)) if (i % nsh) in done_shards]
+    print("  merge: %d/%d shards reported -> %d/%d tiles refreshed"
+          % (len(done_shards), nsh, len(covered), len(grid)))
+
+    def _in_covered(q):
+        la, lo = q.get("lat"), q.get("lng")
+        if la is None or lo is None: return False
+        for (s, w, n, e) in covered:
+            if s <= la < n and w <= lo < e: return True
+        return False
+
+    if len(done_shards) >= nsh:
+        stale = len(prior)
+        prior = []                      # every tile refreshed: prior is fully superseded
+        print("  merge: all shards reported -- dropping %d prior OSM entries "
+              "(fully superseded by this run's filters)" % stale)
+    elif prior:
+        before = len(prior)
+        prior = [q for q in prior if not _in_covered(q)]
+        print("  merge: kept %d of %d prior OSM entries (only tiles no shard covered)"
+              % (len(prior), before))
+
+    if not fresh and not prior:
+        print("  merge: nothing fresh and nothing to keep -- leaving OSM empty")
+        _finish(keep); return
+    print("  merge: %d fresh + %d retained OSM sites" % (len(fresh), len(prior)))
     _finish(keep + fresh + prior)
 
 def _carry_sources(pred, label):
