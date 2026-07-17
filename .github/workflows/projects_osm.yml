@@ -7,7 +7,8 @@ permissions:
   contents: write
 
 jobs:
-  # 16 jobs run at the same time, each taking every 16th tile of the world grid.
+  # 20 jobs run at the same time, each taking every 20th tile of the world grid
+  # (2,088 tiles: the whole globe from 60S to 84N, no hand-drawn regions).
   # (Dense tiles now split into 4 sub-queries when Overpass times out, so each
   #  shard does more work than before -- halve the tiles per shard to compensate.)
   shards:
@@ -16,7 +17,8 @@ jobs:
     strategy:
       fail-fast: false          # one bad shard must not kill the others
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +29,7 @@ jobs:
       - name: Harvest OSM shard ${{ matrix.shard }}
         env:
           OSM_SHARD: ${{ matrix.shard }}
-          OSM_SHARDS: '16'
+          OSM_SHARDS: '20'
           OSM_BUDGET_MIN: '150'
         run: python harvest_projects.py
       - uses: actions/upload-artifact@v4
@@ -57,6 +59,7 @@ jobs:
       - name: Merge shards into projects.json
         env:
           OSM_MERGE: '1'
+          OSM_SHARDS: '20'
         run: |
           ls -la osm_part_*.json || echo "no parts downloaded"
           python harvest_projects.py
