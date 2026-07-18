@@ -14,7 +14,7 @@
   body { font-family:'DM Sans',sans-serif; background:#0a0e17; color:#e8e6e1; overflow:hidden; height:100vh; }
   #header { position:fixed; top:0; left:0; right:0; z-index:1000; background:linear-gradient(180deg,rgba(10,14,23,0.97) 0%,rgba(10,14,23,0.85) 70%,rgba(10,14,23,0) 100%); padding:14px 24px 30px; pointer-events:none; }
   #header h1 { font-family:'Playfair Display',serif; font-size:22px; font-weight:800; letter-spacing:0.5px; color:#f0ece4; pointer-events:auto; text-shadow:0 2px 12px rgba(0,0,0,0.5); }
-  #header .subtitle { font-size:12px; color:#9aa5b8; margin-top:3px; font-weight:400; letter-spacing:0.3px; pointer-events:auto; max-width:52%; }
+  #header .subtitle { font-size:12px; color:#9aa5b8; margin-top:3px; font-weight:400; letter-spacing:0.3px; pointer-events:auto; max-width:none; white-space:nowrap; }
   #map { width:100%; height:100vh; }
   .leaflet-popup-content-wrapper { background:#141a2a !important; border:1px solid var(--accent-soft) !important; border-radius:10px !important; box-shadow:0 8px 40px rgba(0,0,0,0.5) !important; color:#e0ddd5 !important; max-width:380px !important; backdrop-filter:blur(16px); }
   .leaflet-popup-content { margin:14px 16px !important; font-family:'DM Sans',sans-serif !important; line-height:1.5 !important; font-size:13px !important; max-height:430px; overflow-y:auto; scrollbar-width:thin; }
@@ -83,7 +83,7 @@
   .leaflet-control-attribution { background:rgba(20,26,42,0.8) !important; color:#6b7588 !important; font-size:10px !important; }
   .leaflet-control-attribution a { color:var(--accent-hi) !important; }
   .leaflet-control-zoom a { background:rgba(20,26,42,0.92) !important; color:#c0bfba !important; border-color:var(--accent-soft) !important; }
-  @media (max-width:640px){ #header .subtitle{max-width:100%;} #controls{width:200px; top:92px;} }
+  @media (max-width:640px){ #header .subtitle{max-width:100%;white-space:normal;} #controls{width:200px; top:92px;} }
 .tier-tabs{display:flex;gap:4px;margin:7px 0 8px;border-bottom:1px solid var(--accent-soft);}
 .tier-tab{cursor:pointer;padding:4px 10px;font-size:11px;font-weight:600;color:#9fb0cc;border-radius:6px 6px 0 0;user-select:none;}
 .tier-tab.active{color:#0a0e17;background:var(--accent);}
@@ -166,7 +166,7 @@
 #helpPanel .help-body::-webkit-scrollbar{width:8px;}
 #helpPanel .help-body::-webkit-scrollbar-thumb{background:var(--accent-soft);border-radius:4px;}
 #helpPanel .help-body::-webkit-scrollbar-track{background:rgba(255,255,255,0.04);}
-#helpPanel::after{content:'';position:absolute;left:1px;right:9px;bottom:1px;height:20px;background:linear-gradient(transparent,rgba(20,26,42,0.97));pointer-events:none;border-radius:0 0 10px 10px;}
+#helpPanel::after{content:'';position:absolute;left:1px;right:9px;bottom:1px;height:40px;background:linear-gradient(transparent,rgba(20,26,42,0.99));pointer-events:none;border-radius:0 0 10px 10px;}
 #helpPanel.collapsed::after{display:none;}
 .fac-toggle{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#cfe0ff;cursor:pointer;margin:0 0 11px;padding:2px 0;}
 .fac-toggle input{cursor:pointer;width:14px;height:14px;flex:0 0 auto;}
@@ -271,18 +271,18 @@
 <div id="helpPanel">
   <div class="help-head" onclick="this.parentNode.classList.toggle('collapsed')"><span>How to use this map</span><span class="help-tog">&minus;</span></div>
   <div class="help-body">
-    <b>What this shows.</b> This is a research toolkit for land and environmental defenders &mdash; the public databases, records systems and watchdog organisations you can use to investigate the corporations, developers, agencies and money behind the road, mine, pipeline, dam, logging or development threatening a place you’re trying to protect. It groups those tools by what you’re trying to find out: who really owns a company, where the public money goes, a facility’s environmental and legal record, how to pry loose documents, and who owns a parcel of land. It plots them for every jurisdiction where they exist — national, state, county and municipal.<br><br>
+    <b>What this shows.</b> This is a research toolkit for land and environmental defenders &mdash; the public databases, records systems and watchdog organisations you can use to investigate the corporations, developers, agencies and money behind the road, mine, pipeline, dam, logging or development threatening a place you’re trying to protect. It groups those tools by what you’re trying to find out: who really owns a company, where the public money goes, a facility’s environmental and legal record, how to pry loose documents, and who owns a parcel of land. It plots them for every jurisdiction where they exist — national, state, county and municipal. To use it, start by clicking your country and then a lit region; open any single entry to read exactly what it <i>can</i> &mdash; and can&rsquo;t &mdash; tell you, and lean on the lens pills to the right, or the searchable index below, to narrow the whole map down to the one kind of record a particular fight needs.<br><br>
     <b>Navigate.</b> Click a country to zoom in — its regions load and any that hold resources light up. Click a lit region to open its list of research tools, and to drill deeper into its sub-divisions (state &rarr; county &rarr; municipal), since many records — property, courts, permits — are held locally. Click empty space or zoom out to step back up. <b>Facility dots become clickable once you zoom in (about zoom 8);</b> while zoomed out, a click selects the region beneath them.<br><br>
-    <span style="color:#5aa9ff;">&#9679; police</span>, <span style="color:#ffd166;">town halls</span>, <span style="color:#ff9f43;">fire</span>, <span style="color:#6be675;">gov offices</span>, agency HQs — local buildings relevant to different campaigns (records, policing, permits, land use). <b>Zoom in</b> to click a dot for details (toggle off, top-right, to select regions freely). More record-holding places — courthouses, libraries, records offices — come later.<br><br>
+    <span style="color:#5aa9ff;">&#9679; police</span>, <span style="color:#ffd166;">town halls</span>, <span style="color:#ff9f43;">fire</span>, <span style="color:#6be675;">gov offices</span>, agency HQs — local buildings relevant to different campaigns (records, policing, permits, land use). <b>Zoom in</b> to click a dot for details (toggle off, top-right, to select regions freely).<br><br>
     <b>Two ways to filter:</b><br>
     <b>1&middot; Lens pills (right)</b> — each lens is a kind of research: corporate ownership, contracts &amp; money, court records, environmental compliance, FOIA, property, people &amp; networks, monitoring, watchdogs. Selecting one filters the map to that theme so you can see where those resources exist. Below the pills you can narrow further.<br>
-    <b>2&middot; This index (below)</b> — the full directory of <i>every</i> resource on the map. Group &amp; sort it (by country, level, lens…) and search by name.<br><br>
+    <b>2&middot; This index (below)</b> — a directory of the resources on the map. Group &amp; sort it (by country, level, lens…) and search by name.<br><br>
     <b>How to read an entry.</b> Every resource spells out what you <i>can</i> and <i>can’t</i> get from it, and ties it to a concrete aim — stopping a development, fighting a polluter, exposing a landlord, following political money. Sources are official government databases or independent watchdogs and newsrooms; every link is live and verified, and gaps are held honestly, never guessed.<br><br>
 
     <b class="hl-sec">🔥 The live projects layer &mdash; what it is</b><br>
     The green dots are <b>real building projects</b>, harvested automatically every day from official public records. The idea: almost every large project must be written down &mdash; a permit, an environmental review, a licence &mdash; <i>before</i> the bulldozers arrive. Those records are public. This layer collects them so a fight can start early, when it&rsquo;s still winnable.<br><br>
 
-    <b>Where the data comes from.</b> Nothing here is written by us or by an AI &mdash; every dot is a record from a public source, and every source is listed in the &ldquo;Filter by data source&rdquo; box, which you can switch on and off:<br>
+    <b>Where the data comes from.</b> Every dot is a record from a public source, and every source is listed in the &ldquo;Filter by data source&rdquo; box, which you can switch on and off:<br>
     &bull; <b>Building permits</b> &mdash; the US nationwide feed (all 50 states), Chicago &amp; Seattle full history, city and regional portals worldwide, and national open-data portals.<br>
     &bull; <b>US government reviews</b> &mdash; federal environmental reviews and public-land actions (mines, logging, drilling leases) from the Bureau of Land Management and Forest Service.<br>
     &bull; <b>Other countries</b> &mdash; France (Sitadel), UK (PlanIt), Australia (EPBC referrals), Canada (Impact Assessment Registry), Brazil (IBAMA licences).<br>
@@ -290,9 +290,9 @@
 
     <b>How to read a dot.</b> A <b>solid dot</b> is a real, exact location from the record itself. A <b>dashed ring</b> means the source published no coordinates, so the project is shown at its country, state or town level and the exact site is <i>somewhere in that area</i> &mdash; open the linked record to find it. Size and colour indicate rough scale, not importance. Click any dot for the details and a link to the original record.<br><br>
 
-    <b>What it does <i>not</i> show.</b> This is not every project on Earth, and it can&rsquo;t be &mdash; most countries don&rsquo;t publish permits at all. Coverage is deepest in the US, UK, France, Canada and Australia, thinner across Latin America, Africa and Asia, and effectively absent in Russia, China and much of the Middle East. Germany, Spain, Italy and Japan have no national register, so they appear only where individual cities publish data. The US nationwide permit feed shows the <b>last 30 days</b> only. Aid and development entries are filtered to physical construction &mdash; roads, dams, power, pipelines, mines &mdash; so grants, loans and training programmes are deliberately left out.<br><br>
+    <b>What it does <i>not</i> show.</b> This is not every project on Earth, and it can&rsquo;t be &mdash; most countries don&rsquo;t publish permits at all. Coverage is deepest in the US, UK, France, Canada and Australia, thinner across Latin America, Africa and Asia, and effectively absent in Russia, China and much of the Middle East. Germany, Spain, Italy and Japan have no national register, so they appear only where individual cities publish data. The US nationwide permit feed shows the <b>last 30 days</b> only. Aid and development entries are filtered to physical construction &mdash; roads, dams, power, pipelines, mines &mdash; so grants, loans and training programmes are deliberately left out. It also skips small and private work: the OpenStreetMap layer keeps only sites above a size floor &mdash; very roughly a hectare of footprint for a building, about 800&thinsp;m for a road or rail line &mdash; counts a quarry only where it is actually tagged as under construction rather than a long-established pit, and the city permit feeds drop householder and interior jobs, so a garage extension or a kitchen remodel never appears &mdash; only projects big enough to reshape the land.<br><br>
 
-    <b>Honesty rules.</b> A permit is <i>not</i> proof a project is harmful, approved, or going ahead &mdash; it&rsquo;s a public record that something is proposed. Records with impossible coordinates are re-placed at national level and flagged, never quietly deleted or guessed at. Where a source publishes nothing, the gap is left open rather than filled in.
+    <b>Honesty rules.</b> A permit is <i>not</i> proof a project is harmful, approved, or going ahead &mdash; it&rsquo;s a public record that something is proposed. Records with impossible coordinates are re-placed at national level and flagged, never quietly deleted or guessed at.
   </div>
 </div>
 <div id="wirePanel">
@@ -358,7 +358,6 @@
   <div class="voice-wrap"><div class="ctl-title">Voice</div><div id="voicePills"></div></div>
   <div class="filter-tip"><span class="tl">Try combining filters</span><b>Records &amp; data + Official</b> &mdash; the state's own record only, no watchdog or journalism noise. <b>Anti-Corruption lens + Investigative journalism + Interpretive</b> &mdash; just the newsrooms. <b>Institutional + every lens</b> &mdash; monitors only.</div>
   <div class="best-wrap"><div class="ctl-title">Best sources</div><div class="best-hint">Filter the whole map to standout sources by quality.</div><div id="bestPills"></div></div>
-  <div class="sub-wrap"><div class="ctl-title">Subcategories</div><div id="subBox"></div></div>
   <label class="f-status"><input type="checkbox" id="histToggle" checked> Show dormant / defunct</label>
 </div>
 <div id="gbCrumb"></div>
@@ -372,6 +371,7 @@
   <div class="leg-desc">This place has at least one verified accountability source in the lens you&rsquo;re viewing &mdash; an official record-keeper or an independent watchdog.</div>
   <div class="leg-row"><div class="leg-swatch" style="background:rgba(200,210,230,0.08); border:1px solid rgba(200,210,230,0.15);"></div> No verified source</div>
   <div class="leg-desc">No verified official or watchdog source is confirmed here for this lens &mdash; a real gap, held open honestly rather than filled with a guess.</div>
+  <div class="sub-wrap" style="margin-top:9px;"><div class="ctl-title">Subcategories</div><div id="subBox"></div></div>
   <div class="leg-title" style="margin-top:9px;">On the map</div>
   <label class="f-status"><input type="checkbox" id="projChk" checked> 🔥 Live projects to resist</label>
   <div class="proj-note">Live projects = building permits filed in the <b>last 30 days</b>. Typical build time — homes 6–12 mo · commercial &amp; multifamily 12–18 mo · large developments 2–5 yr — so almost none finish within 30 days; a fresh permit marks a project just getting underway.</div>
@@ -691,7 +691,7 @@ function gbMatchRegion(iso,shapeName){ const m=gbKeyMap(iso); const n=gbNorm(sha
 /* ---- drill state + rendering ---- */
 let gbNav=null, gbStack=[], gbClickTime=0, gbLayer=null, gbCurLvl='ADM1', gbEpoch=0, gbFitTime=0;
 let gbPanT=null, gbDragging=false, gbDragEndTime=0; let gbSelFeat=null;
-const gbPane=map.createPane('gbDrill'); gbPane.style.zIndex=450; gbPane.style.pointerEvents='none';
+const gbPane=map.createPane('gbDrill'); gbPane.style.zIndex=500; gbPane.style.pointerEvents='none';
 const gbCanvas=L.canvas({padding:0.5,pane:'gbDrill'});
 function gbShowLoad(t){const el=document.getElementById('gbLoad');if(el){el.textContent=t||'Loading\u2026';el.style.display='block';}}
 function gbHideLoad(){const el=document.getElementById('gbLoad');if(el)el.style.display='none';}
@@ -707,9 +707,9 @@ function gbUnitStyle(iso,lvl,feat){ let lit=false,act=false; let pool=[];
   if(pool.length){ lit=true; act=pool.some(t=>statusOf(t)==='active'); }
   if(feat&&feat._bubble){ lit=true; if(feat._bubble.active) act=true; }
   const acc=DMAP[domain].accent, hi=DMAP[domain].hi;
-  const st = lit?{color:act?hi:'#e0b25a',weight:1.4,opacity:1,fillColor:act?acc:'#c79a4a',fillOpacity:0.5}
-               :{color:'rgba(205,218,242,0.95)',weight:1.5,opacity:1,fillColor:'rgba(150,172,212,0.05)',fillOpacity:0.10};
-  if(feat===gbSelFeat){ st.color='#ffffff'; st.weight=2.8; st.opacity=1; st.fillOpacity=Math.max(st.fillOpacity,0.42); }   /* the unit the user clicked */
+  const st = lit?{color:act?hi:'#e0b25a',weight:2.2,opacity:1,fillColor:act?acc:'#c79a4a',fillOpacity:0.5}
+               :{color:'rgba(210,222,246,1)',weight:2.4,opacity:1,fillColor:'rgba(150,172,212,0.05)',fillOpacity:0.10};
+  if(feat===gbSelFeat){ st.color='#ffffff'; st.weight=3.6; st.opacity=1; st.fillOpacity=Math.max(st.fillOpacity,0.42); }   /* the unit the user clicked */
   return st; }
 function gbClear(){ gbEpoch++; gbSelFeat=null; if(gbLayer&&map.hasLayer(gbLayer))map.removeLayer(gbLayer); gbLayer=null; gbNav=null; gbStack=[]; if(map.getPane('gbDrill'))map.getPane('gbDrill').style.pointerEvents='none'; }
 /* ---- geometric bubble-up: light a parent unit when a populated region sits geometrically inside it
@@ -814,7 +814,7 @@ function gbChildren(top,cb){ const iso=gbNav.iso;
 function gbRender(res,fitB){ if(!gbNav)return; if(gbLayer&&map.hasLayer(gbLayer))map.removeLayer(gbLayer); map.getPane('gbDrill').style.pointerEvents='auto';
   gbCurLvl=res.isAdm4?'ADM4':res.lvl;
   gbLayer=L.geoJSON({type:'FeatureCollection',features:res.feats},{renderer:gbCanvas,pane:'gbDrill',style:f=>gbUnitStyle(gbNav.iso,gbCurLvl,f)}).addTo(map);
-  gbLayer.on('mouseover',e=>{const l=e.layer;if(l.bringToFront)l.bringToFront();l.setStyle({weight:2,color:'#fff',fillOpacity:0.45});l.bindTooltip(gbChildName(l.feature),{sticky:true,direction:'top'}).openTooltip(e.latlng);});
+  gbLayer.on('mouseover',e=>{const l=e.layer;if(l.bringToFront)l.bringToFront();l.setStyle({weight:3.2,color:'#fff',fillOpacity:0.45});l.bindTooltip(gbChildName(l.feature),{sticky:true,direction:'top'}).openTooltip(e.latlng);});
   gbLayer.on('mouseout',e=>{gbLayer.resetStyle(e.layer);e.layer.closeTooltip();});
   gbLayer.on('click',e=>{gbClickTime=Date.now();gbDescend(res.isAdm4?'ADM4':res.lvl,res.isAdm4,e.layer.feature,e.layer.getBounds(),e.latlng);});
   /* auto-recenter removed per request — boundaries load in place; pan/zoom is manual */
@@ -1178,7 +1178,7 @@ const WIRE_ARCHIVE_URL='wire.json';
 let WIRE_LOADED=false; var _sharedArchive=null;
 function _wireEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-var wireMode='live', _wireTop=[], _wireOK=0;
+var wireMode='live', _wireTop=[], _wireOK=0, _wireKept=[];
 function _wireArchive(items){
   try{
     var A=JSON.parse(localStorage.getItem('wireArchiveV1')||'[]');
@@ -1244,18 +1244,40 @@ async function loadWire(force){
     box.innerHTML='<div class="wire-load">The wire is quiet right now'+(_diag?(' ['+_diag+']'):'')+' \u2014 it refreshes automatically. In the meantime, use the sources on the map directly.</div>';
     return;
   }
-  // #8 boost large-scale, long-horizon environmental project fights so the biggest threats lead the wire
+  // #8 rank + FILTER the wire: keep genuine project/land-defence fights, drop
+  // off-topic noise (market prices, repression round-ups, boycotts, events),
+  // and cap any single named project so one fight (e.g. Line 5) cannot dominate.
   (function(){
-    var SCALE=[["pipeline",5],["lng",5],["terminal",3],["refinery",4],["petrochem",4],["oil",3],["gas ",3],["drilling",4],["coal",4],["mine",4],["mining",4],["lithium",4],["copper",3],["uranium",4],["tailings",3],["dam",4],["reservoir",3],["nuclear",4],["reactor",4],["gigafactory",4],["data center",4],["data centre",4],["deforest",5],["clear-cut",4],["clearcut",4],["old-growth",4],["logging",3],["wetland",3],["aquifer",4],["watershed",3],["megaproject",5],["highway",3],["expressway",3],["airport",3],["port ",2],["landfill",3],["incinerator",3],["cafo",3],["factory farm",3],["smelter",3],["quarry",2],["fracking",4],["tar sands",5],["oil sands",5]];
-    var IMPACT=[["irreversible",4],["permanent",3],["decades",3],["generation",3],["endangered",3],["extinction",4],["critical habitat",3],["carbon bomb",5],["emissions",2],["climate",2],["contaminat",3],["toxic",2],["displace",3],["sacred",3],["treaty",2],["indigenous",2],["tribal",2]];
-    var STOP=[["stop",2],["halt",2],["block",2],["blockade",3],["oppos",2],["lawsuit",2],["sue",2],["injunction",3],["permit",2],["appeal",2],["review",1],["reject",2],["moratorium",3],["protest",1],["defend",2],["resist",2]];
-    function sc(t){ t=" "+(t||"").toLowerCase()+" "; var v=0,i; for(i=0;i<SCALE.length;i++){ if(t.indexOf(SCALE[i][0])>=0)v+=SCALE[i][1]; } for(i=0;i<IMPACT.length;i++){ if(t.indexOf(IMPACT[i][0])>=0)v+=IMPACT[i][1]; } for(i=0;i<STOP.length;i++){ if(t.indexOf(STOP[i][0])>=0)v+=STOP[i][1]; } return v; }
-    items.forEach(function(it){ var base=(typeof it.sig==='number'&&isFinite(it.sig))?it.sig:0; it._sig2=base*2 + sc((it.title||"")+" "+(it.desc||"")); });
+    var SCALE=[["pipeline",5],["lng",5],["terminal",3],["refinery",4],["petrochem",4],["drilling",4],["coal",4],["mine",4],["mining",4],["lithium",4],["copper",3],["uranium",4],["tailings",3],["dam",4],["reservoir",3],["nuclear",4],["reactor",4],["gigafactory",4],["data center",4],["data centre",4],["deforest",5],["clear-cut",4],["clearcut",4],["old-growth",4],["logging",3],["wetland",3],["aquifer",4],["watershed",3],["megaproject",5],["highway",3],["expressway",3],["airport",3],["landfill",3],["incinerator",3],["cafo",3],["factory farm",3],["smelter",3],["quarry",2],["fracking",4],["tar sands",5],["oil sands",5]];
+    var IMPACT=[["irreversible",4],["permanent",3],["decades",3],["generation",3],["endangered",3],["extinction",4],["critical habitat",3],["carbon bomb",5],["emissions",2],["contaminat",3],["toxic",2],["displace",3],["sacred",3],["indigenous",2],["tribal",2]];
+    var STOP=[["stop",2],["halt",2],["block",2],["blockade",3],["oppos",2],["lawsuit",2],["injunction",3],["permit",2],["appeal",2],["reject",2],["moratorium",3],["defend",2]];
+    // an item must carry at least one concrete project / land-use signal to appear
+    var PROJ=["pipeline","mine","mining","drill","dam","logging","deforest","quarry","refinery","terminal","lng","power plant","reactor","data center","data centre","warehouse","highway","construction","rezoning","environmental review","wetland","extraction","well pad","landfill","clear-cut","clearcut","gigafactory","smelter","port expansion","fracking","coal","uranium","lithium","oil sands","tar sands","permit","project","proposed","clearing","logging road","dredg","strip mine","open pit"];
+    // hard off-topic markers: commodity prices, prisoner/repression round-ups,
+    // boycotts, culture, promos -- dropped even if a stray keyword matches
+    var OFF=["in contempt","hunger strike","boycott","blood money","boiler room"," rave ","oil gains","oil rises","oil falls","oil slips","oil climbs","oil prices","crude oil","brent","wti","shares rise","shares fall","stock market","quarterly earnings","earnings call","crypto","bitcoin","podcast episode","roundup","round-up","newsletter","week in review","political prisoner","benefit show","fundraiser","merch","ticketed","film screening","book launch","reading list"];
+    // named fights that recur in the feed -- used only to cap over-representation
+    var KEYS=[["mountain valley pipeline","MVP"],["line 5","Line 5"],["line 3","Line 3"],["thacker pass","Thacker Pass"],["cop city","Cop City"],["cp2","CP2 LNG"],["formosa","Formosa"],["willow","Willow"],["resolution copper","Resolution Copper"],["pebble mine","Pebble Mine"],["byhalia","Byhalia"],["enbridge","Line 5"],["mvp","MVP"]];
+    function low(it){ return " "+(((it.title||"")+" "+(it.desc||"")).toLowerCase())+" "; }
+    function hit(t,arr){ for(var i=0;i<arr.length;i++){ if(t.indexOf(arr[i])>=0) return true; } return false; }
+    function sc(t){ var v=0,i; for(i=0;i<SCALE.length;i++){ if(t.indexOf(SCALE[i][0])>=0)v+=SCALE[i][1]; } for(i=0;i<IMPACT.length;i++){ if(t.indexOf(IMPACT[i][0])>=0)v+=IMPACT[i][1]; } for(i=0;i<STOP.length;i++){ if(t.indexOf(STOP[i][0])>=0)v+=STOP[i][1]; } return v; }
+    function pkey(t){ for(var i=0;i<KEYS.length;i++){ if(t.indexOf(KEYS[i][0])>=0) return KEYS[i][1]; } return ""; }
+    function score(it){ var t=low(it); var base=(typeof it.sig==="number"&&isFinite(it.sig))?it.sig:0; it._sig2=base*2+sc(t); it._pk=pkey(t); return it; }
+    var kept=[]; items.forEach(function(it){ var t=low(it); if(hit(t,PROJ)&&!hit(t,OFF)) kept.push(score(it)); });
+    // if the gate is too tight for a sparse archive, fall back to scoring everything
+    _wireKept = (kept.length>=8) ? kept : items.map(score);
   })();
+  items = _wireKept;
   items.sort(function(a,b){ return (b._sig2-a._sig2) || (+new Date(b.date) - +new Date(a.date)); });
   if(src){ var _mx=Math.max.apply(null,items.map(function(z){return +new Date(z.date);}));
-    src.textContent = items.length+' stories on the wire \u00b7 biggest threats first'+(isFinite(_mx)?(' \u00b7 latest '+new Date(_mx).toLocaleDateString()):''); }
-  var out=''; items.slice(0,40).forEach(function(it){ out+=_wireItemHTML(it.name||'', it.title||'', it.link||'#', it.date||Date.now(), ''); });
+    src.textContent = items.length+' project fights on the wire \u00b7 biggest first'+(isFinite(_mx)?(' \u00b7 latest '+new Date(_mx).toLocaleDateString()):''); }
+  // render, capping any one named project at 3 so it cannot crowd out the rest
+  var out=''; var shown=0; var pcnt={}; var spill=[];
+  for(var _wi=0; _wi<items.length && shown<40; _wi++){ var _it=items[_wi]; var _k=_it._pk||"";
+    if(_k){ if((pcnt[_k]||0)>=3){ spill.push(_it); continue; } pcnt[_k]=(pcnt[_k]||0)+1; }
+    out+=_wireItemHTML(_it.name||'', _it.title||'', _it.link||'#', _it.date||Date.now(), ''); shown++; }
+  for(var _si=0; _si<spill.length && shown<40; _si++){ var _sp=spill[_si];
+    out+=_wireItemHTML(_sp.name||'', _sp.title||'', _sp.link||'#', _sp.date||Date.now(), ''); shown++; }
   box.innerHTML=out;
 }
 
