@@ -376,7 +376,7 @@
   <div class="leg-title" style="margin-top:9px;">On the map</div>
   <label class="f-status"><input type="checkbox" id="projChk" checked> 🔥 Live projects to resist</label>
   <div class="proj-note">Live projects = building permits filed in the <b>last 30 days</b>. Typical build time — homes 6–12 mo · commercial &amp; multifamily 12–18 mo · large developments 2–5 yr — so almost none finish within 30 days; a fresh permit marks a project just getting underway.</div>
-  <div class="proj-size"><span class="ps-lab">Project scale &mdash; select any</span><span class="ps-pill on" data-ms="all">All</span><span class="ps-pill" data-ms="3">Medium <i>&ge;$50M &middot; 100 ac &middot; 100 MW</i></span><span class="ps-pill" data-ms="4">Large <i>&ge;$250M &middot; 500 ac</i></span><span class="ps-pill" data-ms="5">Largest <i>&ge;$1B &middot; 2,000 ac &middot; 500 MW</i></span></div>
+  <div class="proj-size"><span class="ps-lab">Project scale &mdash; select any</span><span class="ps-pill on" data-ms="all">All</span><span class="ps-pill" data-ms="3">Medium <i>&ge;$50M &middot; 100 ac &middot; 100 MW</i></span><span class="ps-pill" data-ms="4">Large <i>&ge;$250M &middot; 500 ac</i></span><span class="ps-pill" data-ms="5">Largest <i>&ge;$1B &middot; 2,000 ac &middot; 500 MW</i></span></div><div class="proj-note" style="margin-top:5px;">French &amp; Indian permit entries are sized by <b>building floor area</b>, not land footprint &mdash; a project crossing a threshold is at least that substantial, whatever acreage it sits on.</div><div class="proj-note" style="margin-top:4px;"><b>Not size-ranked</b> (shown at map scale by type): Australia (EPBC), Canada (IAAC), Brazil (IBAMA), and U.S. federal reviews (Federal Register, public-land NEPA) &mdash; these publish no numeric size (~12,400 sites, ~8% of all mapped).</div>
   <div class="proj-search"><input id="projQ" type="search" placeholder="Search projects by name\u2026" autocomplete="off"><span id="projQn"></span></div>
   <div class="proj-src-cap">Filter by data source</div>
   <div id="projSrcBox" class="proj-src-box"></div>
@@ -795,17 +795,18 @@ if(/^\s*$/.test(ln)){flushP(para);para=[];i++;continue;}
 para.push(ln.trim());i++;}
 flushP(para);return out.join('\n');}
 window._pbCache=null;
+function _pbUrls(){var list=['playbook.md'];try{var h=location.hostname,seg=location.pathname.split('/').filter(Boolean);if(/\.github\.io$/i.test(h)){var u=h.replace(/\.github\.io$/i,'');var repo=seg[0]||'';if(repo)list.push('https://raw.githubusercontent.com/'+u+'/'+repo+'/main/playbook.md');}}catch(e){}return list;}
 window._loadPlaybook=function(btn){var wrap=btn.parentNode,body=wrap.querySelector('.pb-body'),car=btn.querySelector('.pb-car');
 if(body.getAttribute('data-loaded')==='1'){var vv=body.style.display!=='none';body.style.display=vv?'none':'block';if(car)car.innerHTML=vv?'\u25B8':'\u25BE';return;}
 body.style.display='block';if(car)car.innerHTML='\u25BE';body.innerHTML='<div class="pb-load">Loading guide\u2026</div>';
-function render(md){body.innerHTML='<a class="pb-dl" href="playbook.md" download="welcome-to-your-galaxy.md">\u2193 Download full guide (.md)</a>'+_mdToHtml(md);body.setAttribute('data-loaded','1');}
-if(window._pbCache){render(window._pbCache);return;}
-fetch('playbook.md').then(function(r){if(!r.ok)throw 0;return r.text();}).then(function(t){window._pbCache=t;render(t);}).catch(function(){body.innerHTML='<div class="pb-load">Couldn\u2019t load the guide file \u2014 make sure <code>playbook.md</code> is committed next to index.html.</div>';});};
-function _usGuide(iso){ if(iso!=='USA') return ''; return '<div class="pb-wrap"><button class="pb-btn" onclick="_loadPlaybook(this)"><span class="pb-car">\u25B8</span> Community resistance playbook<em>how communities stop destructive projects</em></button><div class="pb-body" style="display:none"></div></div>'; }
+function render(md,url){body.innerHTML='<a class="pb-dl" href="'+(url||'playbook.md')+'" download="welcome-to-your-galaxy.md">\u2193 Download full guide (.md)</a>'+_mdToHtml(md);body.setAttribute('data-loaded','1');}
+if(window._pbCache){render(window._pbCache,window._pbUrl);return;}
+var urls=_pbUrls(),i=0;(function tryNext(){if(i>=urls.length){body.innerHTML='<div class="pb-load">Couldn\u2019t load the guide. If you just committed it, wait ~1 min for GitHub Pages to rebuild, then hard-refresh.</div>';return;}var u=urls[i++];fetch(u).then(function(r){if(!r.ok)throw 0;return r.text();}).then(function(t){window._pbCache=t;window._pbUrl=u;render(t,u);}).catch(tryNext);})();};
+function _usGuide(iso){ if(iso!=='USA') return ''; return '<div class="pb-wrap"><button class="pb-btn" onclick="_loadPlaybook(this)"><span class="pb-car">\u25B8</span> U.S. community resistance how-to<em>how communities stop destructive projects</em></button><div class="pb-body" style="display:none"></div></div>'; }
 function gbEnterCountry(iso,feat,latlng){ gbClear(); gbNav={iso:iso,feat:feat,adm4:null}; gbStack=[{type:'country',lvl:'ADM0',feat:feat,bounds:gbFeatBounds(feat)}];
   const nv=natVis(iso), nm=(trackerData[iso]&&trackerData[iso].name)||(feat.properties&&feat.properties.name)||iso;
   let body = nv.length ? popHTML(nm,nv,'country','') : (trackerData[iso]?countryNoDataHTML(iso,nm,''):('<div class="popup-country">'+nm+'</div><div class="no-data">No verified independent database found for this country in any lens.</div>'));
-  body += _usGuide(iso);
+  body = body.replace('</div>','</div>'+_usGuide(iso),1);
   showInfoPanel(body);
   gbFitCountry(feat);
   /* card clearance is handled by the fit's left reserve (gbFitPad) in one animation; no secondary pan */
@@ -901,7 +902,7 @@ let gbLastZoom=map.getZoom();
 function _showStackPopup(nt){ if(!nt||!gbNav)return;
   try{
     if(nt.type==='country'){ var iso=gbNav.iso; var nv=natVis(iso); var nm=(trackerData[iso]&&trackerData[iso].name)||iso;
-      var _cb=nv.length?popHTML(nm,nv,'country',''):(trackerData[iso]?countryNoDataHTML(iso,nm,''):'<div class="popup-country">'+nm+'</div>'); showInfoPanel(_cb+_usGuide(iso)); }
+      var _cb=nv.length?popHTML(nm,nv,'country',''):(trackerData[iso]?countryNoDataHTML(iso,nm,''):'<div class="popup-country">'+nm+'</div>'); showInfoPanel(_cb.replace('</div>','</div>'+_usGuide(iso),1)); }
     else if(nt.feat){ gbUnitPopup(gbNav.iso, nt.lvl||'ADM1', nt.feat, null, nt.bounds); }
   }catch(e){}
 }
