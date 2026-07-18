@@ -11,9 +11,11 @@ import json, time, datetime, html, re, os, calendar
 import feedparser
 
 MOVEMENT = [
-    ("It's Going Down", "https://itsgoingdown.org/feed/", 5, False),
-    ("Unicorn Riot",    "https://unicornriot.ninja/feed/", 5, False),
-    ("Earth First! Journal", "https://earthfirstjournal.news/feed/", 5, False),
+    # strict=True now: only items that name a concrete project/land-use fight get
+    # through, and the weight is lower so scene round-ups stop dominating the wire.
+    ("It's Going Down", "https://itsgoingdown.org/feed/", 3, True),
+    ("Unicorn Riot",    "https://unicornriot.ninja/feed/", 3, True),
+    ("Earth First! Journal", "https://earthfirstjournal.news/feed/", 3, True),
 ]
 INVESTIGATIVE = [
     ("Grist",    "https://grist.org/feed/",          2, True),
@@ -21,19 +23,33 @@ INVESTIGATIVE = [
     ("Mongabay", "https://news.mongabay.com/feed/",   2, True),
     ("Inside Climate News", "https://insideclimatenews.org/feed/", 2, True),
     ("The Narwhal", "https://thenarwhal.ca/feed/",    2, True),
+    ("Climate Home News", "https://www.climatechangenews.com/feed/", 2, True),
+    ("Guardian Environment", "https://www.theguardian.com/environment/rss", 2, True),
+    ("Mongabay Latam", "https://es.mongabay.com/feed/", 2, True),
 ]
 FRONTS = [
-    "Mountain Valley Pipeline", "Line 5 pipeline", "Thacker Pass lithium",
-    "Cop City forest Atlanta", "CP2 LNG", "Formosa Plastics Louisiana",
-    "Willow project Alaska drilling", "Resolution Copper Oak Flat", "Pebble Mine Bristol Bay",
-    "pipeline blockade", "old growth logging protest", "lithium mine protest",
-    "data center water fight", "LNG terminal Gulf Coast", "coal ash landfill fight",
+    # A few high-profile US fights...
+    "Mountain Valley Pipeline", "Line 5 pipeline", "Willow project Alaska drilling",
+    "CP2 LNG terminal", "Resolution Copper Oak Flat",
+    # ...balanced against major fights on every other continent, so the wire reads
+    # as global coverage of the biggest, most irreversible projects.
+    "EACOP East African Crude Oil Pipeline", "Uganda Tilenga oil drilling",
+    "Adani Carmichael coal mine Australia", "Cerrejon coal mine Colombia",
+    "Cobre Panama mine", "Rio Tinto Jadar lithium Serbia",
+    "Grand Inga dam Congo", "ReconAfrica Okavango drilling",
+    "Indonesia nickel mining Sulawesi deforestation", "Papua palm oil deforestation",
+    "Amazon deforestation highway BR-319", "Trans Mountain pipeline Canada",
+    "deep sea mining Pacific", "Balkans hydropower dam protest",
+    "Hasdeo coal mine India", "Andes lithium mining protest",
+    # generic global fronts (region-neutral phrasing)
+    "Indigenous land defenders mine pipeline", "old growth logging protest",
+    "LNG terminal opposition", "pipeline blockade protest",
 ]
 def google_news(q):
     from urllib.parse import quote
     return ("Front: " + q,
             "https://news.google.com/rss/search?q=%s&hl=en-US&gl=US&ceid=US:en" % quote(q),
-            3, True)
+            2, True)
 
 ALLOW = [
     "pipeline","lng","refinery","petrochemical","cracker plant","gas plant","power plant",
@@ -47,6 +63,9 @@ ALLOW = [
     "blockade","tree sit","tree-sit","encampment","land defense","water protector","frontline",
     "eminent domain","easement","permit","comment period","draft eis","environmental review",
     "nepa","army corps","ferc","zoning board","planning commission","conservation easement",
+    "hydropower","hydroelectric","palm oil","nickel","cobalt","bauxite","gold mine","copper mine",
+    "crude oil pipeline","offshore drilling","seabed mining","deep-sea mining","megadam","reservoir dam",
+    "land defender","land grab","evict","displacement","rainforest","peatland","mangrove","biodiversity",
 ]
 def matches(text):
     t = text.lower()
@@ -63,7 +82,10 @@ def collect():
             fp = feedparser.parse(url)
         except Exception as e:
             print("  feed %s failed: %s" % (name, e)); continue
+        per_feed = 0
         for e in fp.entries[:25]:
+            if per_feed >= 6:
+                break
             title = clean(e.get("title"))
             summary = clean(e.get("summary", ""))
             link = e.get("link", "")
@@ -76,6 +98,7 @@ def collect():
             if key in seen:
                 continue
             seen.add(key)
+            per_feed += 1
             ts = None
             for f in ("published_parsed", "updated_parsed"):
                 if e.get(f):
