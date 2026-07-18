@@ -64,14 +64,6 @@
   "snippet": "State renews permit for Enbridge oil pipeline tunnel under Straits of Mackinac  Detroit Free Press"
  },
  {
-  "name": "Front: Line 5 pipeline",
-  "title": "Michigan agencies grant permits for Line 5 oil pipeline tunnel project - The Detroit News",
-  "link": "https://news.google.com/rss/articles/CBMi3AFBVV95cUxPSFJVMm94TE5SWVdvRjVTZG9uOGhUWnFudHUxZzVQeGI4aTlzUnhrWDFGZ2dhSl93eDdtRnkxODhwc3VrV1NoNWZyVTJ4RGNvQUw2NUlfOVQ2RWZGYTQ3cWVSMm1nYlVZTkZOT2lFTVFsbWE3RnJGU0ZydzFpa0dUTUtncDNIamFoal85dnBiNGJFS2dQRVowaVQtM1lIa3V2aWlsZzVyMEY3ZmFLUk1sMTdJVlF3VzhrQVBWMERBeVlkZzN4d09HTWhaNVhqcVhPUXRrS2VGRnRYeTlO?oc=5",
-  "date": 1784162280000,
-  "sig": 2,
-  "snippet": "Michigan agencies grant permits for Line 5 oil pipeline tunnel project  The Detroit News"
- },
- {
   "name": "Mongabay",
   "title": "Nepal’s birdwatchers can fill gaps in conservation data",
   "link": "https://news.mongabay.com/short-article/2026/07/nepals-birdwatchers-can-fill-gaps-in-conservation-data/",
@@ -118,6 +110,14 @@
   "date": 1784153220000,
   "sig": 2,
   "snippet": "Michigan signs off on Canadian oil giant's Line 5 pipeline project  Milwaukee Journal Sentinel"
+ },
+ {
+  "name": "Front: Trans Mountain pipeline Canada",
+  "title": "China’s Rongsheng Weighs Alberta-to-B.C. Pipeline Oil Supply Pact - EnergyNow",
+  "link": "https://news.google.com/rss/articles/CBMimAFBVV95cUxNZjIxU2g3RldDdU84S0ZjUER4dUNqaEF3V21iRnVXUFZ5WHNJa0hYcFYyek0tNlBrbDUtZklTTllPQWZLMDBuLW80NVRwS2tIUl83STJjcjVsendmcUI1SzFHSUw4NUJMeVBGZ0NxSjV4WEp5STIxdXFhdTZUQTNCSzVqMFkwQ1ZlUGdWTzRIRHRHR0VDMXdVVw?oc=5",
+  "date": 1784367447000,
+  "sig": 2,
+  "snippet": "China’s Rongsheng Weighs Alberta-to-B.C. Pipeline Oil Supply Pact  EnergyNow"
  },
  {
   "name": "Front: deep sea mining Pacific",
@@ -337,11 +337,19 @@
  },
  {
   "name": "Front: Line 5 pipeline",
-  "title": "Michigan OKs key permits for Enbridge Line 5 tunnel under Straits of Mackinac - MLive.com",
-  "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxOYUhzQUoyR2p2eFFFcXVESUVmT0o0RTBmMVhBWURzVi1CTENPM0tsTU5jM1RKeWN4QmF5UkVCM0FZOHlwUWZKdjR6RWVPY2c0U2ZCRE1SdkdCdVJZQkxQMUhmNU1KcGV3MGQzUXN4SzlMcVhMcFFNOVpXV2NCMnBJRnRLcWdPNHI2N1lHaHVJQ0luU1NkX2VJaFRnQ2JLTkZPcXpFdUdMZ3Fzb2hLOUlyelpQNHpsV2RpS2dTd0xB?oc=5",
-  "date": 1784159460000,
+  "title": "Tribes, environmental advocates decry Michigan’s approval of Line 5 permits - Michigan Advance",
+  "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxQeUE4bWZGUnA4NlpuYXRvbWlOUXVOb2c2S3NGdlZhU1NlOVEtdzVQTEROdU9GbV9SMGpxM2dSYlF1LW5rUURQSzB6ODZWd3p6Yzl4OERjQWJjR2l6RlV3Qk9YTUYwMjIyOXJYN3JTOENyVVZwSG9QQTU0Z3hBSWRzdzB4T3J5bDhCWVRXZEYwbEt1SVQzOUg1MnVtdHNBeHdkSjRyYW9KN08yNXNIM1ZCSF9qcw?oc=5",
+  "date": 1784225391000,
   "sig": 2,
-  "snippet": "Michigan OKs key permits for Enbridge Line 5 tunnel under Straits of Mackinac  MLive.com"
+  "snippet": "Tribes, environmental advocates decry Michigan’s approval of Line 5 permits  Michigan Advance"
+ },
+ {
+  "name": "Front: Line 5 pipeline",
+  "title": "Opponents Vow to Fight On as Michigan Approves Tunnel for Line 5 Pipeline - The Energy Mix",
+  "link": "https://news.google.com/rss/articles/CBMipgFBVV95cUxOcUZpMHlJYmlqaV9vNW1odVlyYUVVWU5rOEFvRjVRN2Z4bGRONEVfQ0tyX3JDYVdVcjZOZ1NwQmF0R1dqTHI0RGNralpyb29VTnJETlBBWG1KV0p2YnIwdzVBYkhLUkFKNXhWeWk3M2tITUdfVFc0WXpybjluY05DSkdtNVM4MlFBMVhEeUhRSlJQSDlKZk53X0JEUEpkMFpQS1dVQVFR?oc=5",
+  "date": 1784326452000,
+  "sig": 2,
+  "snippet": "Opponents Vow to Fight On as Michigan Approves Tunnel for Line 5 Pipeline  The Energy Mix"
  },
  {
   "name": "Front: CP2 LNG terminal",
@@ -358,14 +366,6 @@
   "date": 1784166999000,
   "sig": 2,
   "snippet": "This LNG Stock Just Broke Out – And A Massive Project Is Behind It  Stocktwits"
- },
- {
-  "name": "Front: Trans Mountain pipeline Canada",
-  "title": "CERAWeek: Canadian Crude Re-exports From Gulf Coast Set to Surge with Pipeline Projects, Enbridge Says - EnergyNow",
-  "link": "https://news.google.com/rss/articles/CBMiygFBVV95cUxNeU9iRWRDRlNWbnYxR2Fib1gwb1JmWEwwQ256ODN1R0VlcjNaSXVSbTlsUHhJN0tJVFlrNzhrX2VnRWxtYUFRRXR6YTdhbU9KUjFoWWFXdjNSUmNQTzg5ZlNHRGpQdXJ2b2pvTTcxRUpfWmlUbjQtNE9IV2Nha0pqdkR0YnRiODZta1JubFNvcEFTNGNXdWxrNjljeU5jRFU4NENiS19Yd0ZyS0lNdjlCUnVBRHFTMHpQN1JDNWNRc0hHcS1oMFdIeC1n?oc=5",
-  "date": 1784362485000,
-  "sig": 2,
-  "snippet": "CERAWeek: Canadian Crude Re-exports From Gulf Coast Set to Surge with Pipeline Projects, Enbridge Says  EnergyNow"
  },
  {
   "name": "Front: Trans Mountain pipeline Canada",
