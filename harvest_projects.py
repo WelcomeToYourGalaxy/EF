@@ -49,8 +49,48 @@ def _type_score(type_str):
             best = max(best, w)
     return best
 
+def _fmt_usd(v):
+    v = float(v)
+    if v >= 1e9: return "$%.1fB" % (v / 1e9)
+    if v >= 1e6: return "$%.0fM" % (v / 1e6)
+    if v >= 1e3: return "$%.0fK" % (v / 1e3)
+    return "$%d" % int(v)
+
+def _parse_size(size_str):
+    """Extract a real magnitude from a human size string ($ w/ K/M/B suffix,
+    acres, hectares, MW, miles/km). Returns whatever it can find; empty if none.
+    No guessing: only pulls a number when a recognised unit is actually present."""
+    if not size_str:
+        return {}
+    s = str(size_str); out = {}
+    m = re.search(r"\$\s*([\d,]+(?:\.\d+)?)\s*(b|bn|billion|m|mn|million|k|thousand)?", s, re.I)
+    if m:
+        v = float(m.group(1).replace(",", "")); suf = (m.group(2) or "").lower()
+        if suf in ("b", "bn", "billion"):   v *= 1e9
+        elif suf in ("m", "mn", "million"): v *= 1e6
+        elif suf in ("k", "thousand"):      v *= 1e3
+        out["value_usd"] = v
+    a = re.search(r"([\d,]+(?:\.\d+)?)\s*(?:acres?|\bac\b)", s, re.I)
+    if a: out["acres"] = float(a.group(1).replace(",", ""))
+    hh = re.search(r"([\d,]+(?:\.\d+)?)\s*(?:hectares?|\bha\b)", s, re.I)
+    if hh and "acres" not in out: out["acres"] = float(hh.group(1).replace(",", "")) * 2.471
+    mw = re.search(r"([\d,]+(?:\.\d+)?)\s*mw\b", s, re.I)
+    if mw: out["mw"] = float(mw.group(1).replace(",", ""))
+    mi = re.search(r"([\d,]+(?:\.\d+)?)\s*(?:miles?|\bmi\b)", s, re.I)
+    if mi: out["miles"] = float(mi.group(1).replace(",", ""))
+    km = re.search(r"([\d,]+(?:\.\d+)?)\s*km\b", s, re.I)
+    if km and "miles" not in out: out["miles"] = float(km.group(1).replace(",", "")) * 0.621
+    return out
+
 def _magnitude_score(size_str, value_usd=None, acres=None, mw=None, miles=None):
     """Rough 1-5 from whatever magnitude field is available."""
+    # Fall back to parsing the size string when no explicit magnitude field was set.
+    if not any([value_usd, acres, mw, miles]) and size_str:
+        ps = _parse_size(size_str)
+        value_usd = value_usd or ps.get("value_usd")
+        acres = acres or ps.get("acres")
+        mw = mw or ps.get("mw")
+        miles = miles or ps.get("miles")
     if value_usd:
         if value_usd >= 1e9:  return 5
         if value_usd >= 2.5e8: return 4
@@ -562,7 +602,7 @@ def fetch_permitstack(min_value=1000000, per_state_cap=500):
                 "name": str(nm)[:140], "type": "New construction",
                 "state": _ps_get(r, "state") or "",
                 "lat": round(float(lat), 5), "lng": round(float(lng), 5),
-                "size": size, "status": "Permit on file",
+                "size": size, "value_usd": (float(val) if val else None), "status": "Permit on file",
                 "company": _ps_get(r, "contractor_name") or "", "url": "",
                 "date": _iso_date(_ps_get(r, "date_issued")),
                 "desc": ("Building permit" + (" \u00b7 " + addr if addr else "") +
@@ -876,16 +916,16 @@ def fetch_world_bank(rows=1000):
             amt = pr.get("totalamt") or pr.get("totalcommamt") or ""
             try:
                 amtf = float(str(amt).replace(",", "")) if amt else 0
-                size = ("$%sM" % format(int(amtf), ",")) if amtf else ""
+                size = _fmt_usd(amtf) if amtf else ""   # World Bank totalamt is USD; format cleanly
             except Exception:
-                size = ""
+                amtf = 0; size = ""
             sec = pr.get("sector1")
             if isinstance(sec, dict): sec = sec.get("Name") or sec.get("name") or ""
             p = {"name": (pr.get("project_name") or "World Bank project")[:140],
                  "type": (sec or "Development project"),
                  "state": str(cn),
                  "lat": round(_lat, 5), "lng": round(_lng, 5), "precise": _precise,
-                 "size": size, "status": str(pr.get("status") or "Active"),
+                 "size": size, "value_usd": (amtf or None), "status": str(pr.get("status") or "Active"),
                  "company": "World Bank",
                  "url": ("https://projects.worldbank.org/en/projects-operations/"
                          "project-detail/" + str(pr.get("id") or "")),
@@ -1266,7 +1306,7 @@ def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
                 p = {"name": str(nm or attrs.get("name") or "Permitted project")[:140],
                      "type": "New construction", "state": "", "date": _dt,
                      "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
-                     "size": size,
+                     "size": size, "value_usd": (float(val) if val else None),
                      "status": "Permit on file", "company": "",
                      "url": "https://hub.arcgis.com/datasets/" + str(d.get("id") or ""),
                      "desc": "Building permit via " + str(attrs.get("name") or "city open data") + ".",
@@ -1656,16 +1696,52 @@ def _osm_query(s, w, n, e, cap):
             'way["power"="plant"]["construction"](%s);'
             'way["waterway"="dam"]["construction"](%s);'
             'relation["landuse"="construction"](%s);'
-            ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
+            ');out geom %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
+
+def _osm_measure(el, linear):
+    """From out-geom geometry: (acres, miles). Area for closed features, length
+    for linear ones. Equirectangular projection about mean latitude -- accurate
+    enough for ranking. (None, None) if geometry is unusable."""
+    g = el.get("geometry") or []
+    pts = [(pt.get("lat"), pt.get("lon")) for pt in g
+           if isinstance(pt, dict) and pt.get("lat") is not None and pt.get("lon") is not None]
+    if len(pts) < 2:
+        return (None, None)
+    import math as _m
+    mlat = sum(a for a, _ in pts) / len(pts)
+    kx = 111320.0 * _m.cos(_m.radians(mlat)); ky = 110540.0
+    if linear:
+        dist = 0.0
+        for i in range(1, len(pts)):
+            dx = (pts[i][1] - pts[i-1][1]) * kx; dy = (pts[i][0] - pts[i-1][0]) * ky
+            dist += _m.hypot(dx, dy)
+        return (None, dist / 1609.344)
+    a2 = 0.0
+    for i in range(len(pts)):
+        x1 = pts[i][1] * kx; y1 = pts[i][0] * ky
+        j = (i + 1) % len(pts)
+        x2 = pts[j][1] * kx; y2 = pts[j][0] * ky
+        a2 += x1 * y2 - x2 * y1
+    return (abs(a2) / 2.0 / 4046.8564224, None)
+
+def _osm_center(el):
+    b = el.get("bounds") or {}
+    if b.get("minlat") is not None:
+        return ((b["minlat"] + b["maxlat"]) / 2.0, (b["minlon"] + b["maxlon"]) / 2.0)
+    g = el.get("geometry") or []
+    if g and isinstance(g[0], dict) and g[0].get("lat") is not None:
+        return (g[0]["lat"], g[0]["lon"])
+    c = el.get("center") or {}
+    return (c.get("lat", el.get("lat")), c.get("lon", el.get("lon")))
 
 def _osm_collect(data, label, out):
     for el in (data.get("elements") or []):
         try:
-            c = el.get("center") or {}
-            lat = c.get("lat", el.get("lat")); lng = c.get("lon", el.get("lon"))
+            lat, lng = _osm_center(el)
             if lat is None or lng is None: continue
             tg = el.get("tags") or {}
-            nm = tg.get("name") or tg.get("operator") or ""
+            nm = tg.get("name") or tg.get("construction:name") or tg.get("operator") or ""
+            linear = bool(tg.get("highway") or tg.get("railway") or tg.get("man_made") == "pipeline")
             kind = ("Road under construction" if tg.get("highway") else
                     "Railway under construction" if tg.get("railway") else
                     "Building under construction" if tg.get("building") else
@@ -1682,6 +1758,12 @@ def _osm_collect(data, label, out):
                  "url": "https://www.openstreetmap.org/way/" + str(el.get("id") or ""),
                  "desc": kind + " mapped in OpenStreetMap (ODbL).",
                  "source": "osm_construction"}
+            acres, miles = _osm_measure(el, linear)
+            if miles is not None and miles > 0:
+                p["miles"] = round(miles, 2); p["size"] = "%.1f mi" % miles
+            elif acres is not None and acres > 0:
+                p["acres"] = round(acres, 1)
+                p["size"] = ("%d ac" % round(acres)) if acres >= 1 else ("%.2f ac" % acres)
             p["impact"] = rate_project(p, sensitivity=0)
             out.append(p)
         except Exception:
@@ -1729,7 +1811,7 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
              'way["power"="plant"]["construction"](%s);'
              'way["waterway"="dam"]["construction"](%s);'
              'relation["landuse"="construction"](%s);'
-             ');out center %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
+             ');out geom %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
         data = _overpass(q, label, deadline=t_end)
         if data is None:
             # A 504 means the tile was too heavy for the server, not that it is
@@ -1749,35 +1831,7 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
             else: timeouts += 1
             continue
         ok_boxes += 1
-        for el in (data.get("elements") or []):
-            try:
-                c = el.get("center") or {}
-                lat = c.get("lat", el.get("lat")); lng = c.get("lon", el.get("lon"))
-                if lat is None or lng is None: continue
-                tg = el.get("tags") or {}
-                nm = (tg.get("name") or tg.get("construction:name") or
-                      tg.get("operator") or "")
-                kind = ("Road under construction" if tg.get("highway") else
-                        "Railway under construction" if tg.get("railway") else
-                        "Building under construction" if tg.get("building") else
-                        "Quarry / extraction site" if tg.get("landuse") == "quarry" else
-                        "Pipeline under construction" if tg.get("man_made") == "pipeline" else
-                        "Power plant under construction" if tg.get("power") == "plant" else
-                        "Dam under construction" if tg.get("waterway") == "dam" else
-                        "Construction site")
-                p = {"name": (nm or kind)[:140], "type": kind, "state": label,
-                     "lat": round(float(lat), 5), "lng": round(float(lng), 5),
-                     "precise": True, "size": "", "status": "Under construction",
-                     "company": tg.get("operator") or "",
-                     "url": "https://www.openstreetmap.org/way/" + str(el.get("id") or ""),
-                     "desc": (kind + " mapped in OpenStreetMap" +
-                              ((" \u00b7 " + nm) if nm else "") +
-                              ". Source: OpenStreetMap contributors (ODbL)."),
-                     "source": "osm_construction"}
-                p["impact"] = rate_project(p, sensitivity=0)
-                out.append(p)
-            except Exception:
-                continue
+        _osm_collect(data, label, out)
         time.sleep(1.2)   # Overpass fair-use pacing
     # dedup accumulated + new by rounded position
     seen = set(); merged = []
