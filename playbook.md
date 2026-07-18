@@ -1,6 +1,6 @@
-# WELCOME TO YOUR GALAXY: HOW COMMUNITIES STOP DESTRUCTIVE DEVELOPMENT PROJECTS
+# HOW COMMUNITIES CAN STOP DESTRUCTIVE DEVELOPMENT PROJECTS IN THE U.S.
 
-**Complete Community Opposition Toolkit**
+**Complete Community Opposition How-To**
 
 Based on analysis of 50+ documented successful campaigns and more
 
