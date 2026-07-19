@@ -403,7 +403,7 @@ def _is_project(text):
         return False
     return any(a in t for a in _PROJECT_ALLOW)
 
-def fetch_federal_register(days=45, per_page=100):
+def fetch_federal_register(days=120, per_page=100):
     """EIS / NEPA notices from the Federal Register API (free, no key).
     No coordinates in the data, so each is geocoded to its STATE centroid
     (approximate) and only when a single state is unambiguously named."""
@@ -730,7 +730,7 @@ def _geocode_place(q, cc="us"):
     _GEO_CACHE[key] = res
     return res
 
-def fetch_public_land_nepa(days=60, per_page=100):
+def fetch_public_land_nepa(days=180, per_page=100):
     out = []
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     for mode, val, label in [("term", "bureau of land management", "BLM"),
@@ -1335,7 +1335,7 @@ _UK_TRIVIAL_RE = re.compile(
     r"repair\s*works|replacement\s*of\s*(?:windows|doors|nets)|cricket|"
     r"pole\b|cabinet|solar\s*panel|flue|boiler|satellite)", re.I)
 
-def fetch_ukplanit(days=90, pg_sz=200):
+def fetch_ukplanit(days=180, pg_sz=200):
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     today = datetime.date.today().isoformat()
     # PlanIt is built for local queries -- a country-sized bbox returns nothing.
@@ -2022,7 +2022,7 @@ def _fr_communes():
             continue
     return out
 
-def fetch_sitadel_fr(max_rows=3000, months=6):
+def fetch_sitadel_fr(max_rows=3000, months=12):
     com = _fr_communes()
     if not com:
         print("  sitadel fr: no commune centroids (skip)"); return []
