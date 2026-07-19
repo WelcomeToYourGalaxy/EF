@@ -1683,6 +1683,27 @@ def _quarters(s, w, n, e):
     ms, mw = (s + n) / 2.0, (w + e) / 2.0
     return [(s, w, ms, mw), (s, mw, ms, e), (ms, w, n, mw), (ms, mw, n, e)]
 
+def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=2):
+    """Fetch one tile; on a server-side timeout, recursively split into quarters
+    (up to max_depth extra levels: 5deg -> 2.5deg -> 1.25deg) so DENSE regions
+    (Western Europe, East Asia) actually fill in instead of leaving empty boxes.
+    Returns True if any data landed for this box."""
+    if deadline and time.time() > deadline:
+        return False
+    data = _overpass(_osm_query(s, w, n, e, cap), label, deadline=deadline)
+    if data is not None:
+        _osm_collect(data, label, out)
+        return True
+    # server timeout: subdivide if we still have depth budget and wall-clock time
+    if depth >= max_depth or (deadline and time.time() > deadline - 60):
+        return False
+    got = False
+    for (qs, qw, qn, qe) in _quarters(s, w, n, e):
+        if _osm_fetch_box(qs, qw, qn, qe, cap, label + "/q", out, deadline, depth + 1, max_depth):
+            got = True
+        time.sleep(0.6)
+    return got
+
 def _osm_query(s, w, n, e, cap):
     bb = "%s,%s,%s,%s" % (s, w, n, e)
     return ('[out:json][timeout:70];('
@@ -1801,37 +1822,12 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
         # Overpass can measure features, so instead of an arbitrary cap we keep the
         # BIG ones: length() on a closed way is its perimeter (400m ~ 1 hectare),
         # on a road/rail it's the route length.
-        q = ('[out:json][timeout:70];('
-             'way["landuse"="construction"](%s)(if:length()>400);'
-             'way["highway"="construction"](%s)(if:length()>800);'
-             'way["railway"="construction"](%s)(if:length()>800);'
-             'way["building"="construction"](%s)(if:length()>250);'
-             'way["landuse"="quarry"]["construction"](%s);'
-             'way["man_made"="pipeline"]["construction"](%s);'
-             'way["power"="plant"]["construction"](%s);'
-             'way["waterway"="dam"]["construction"](%s);'
-             'relation["landuse"="construction"](%s);'
-             ');out geom %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
-        data = _overpass(q, label, deadline=t_end)
-        if data is None:
-            # A 504 means the tile was too heavy for the server, not that it is
-            # empty. Split it into quarters and retry -- otherwise dense areas
-            # (Europe, East Asia) would time out forever and stay blank.
-            hit = False
-            if time.time() > t_end - 180:
-                timeouts += 1; continue      # no time to split; leave for next run
-            for (qs, qw, qn, qe) in _quarters(s, w, n, e):
-                sub = _osm_query(qs, qw, qn, qe, cap)
-                d2 = _overpass(sub, label + "/q", deadline=t_end)
-                if d2 is not None:
-                    hit = True
-                    _osm_collect(d2, label, out)
-                time.sleep(1.0)
-            if hit: ok_boxes += 1
-            else: timeouts += 1
-            continue
-        ok_boxes += 1
-        _osm_collect(data, label, out)
+        # recursive subdivide-on-timeout (5deg -> 2.5deg -> 1.25deg) so dense
+        # regions (Western Europe, East Asia) fill in instead of leaving boxes.
+        if _osm_fetch_box(s, w, n, e, cap, label, out, t_end):
+            ok_boxes += 1
+        else:
+            timeouts += 1
         time.sleep(1.2)   # Overpass fair-use pacing
     # dedup accumulated + new by rounded position
     seen = set(); merged = []
@@ -2413,22 +2409,10 @@ def fetch_osm_shard(k, n, cap=3000):
         if time.time() > t_end:
             skipped += 1; continue
         label = "%.0f,%.0f" % (s, w)
-        q = _osm_query(s, w, n_, e, cap)
-        data = _overpass(q, label, deadline=t_end)
-        if data is None:
-            if time.time() > t_end - 120:
-                to += 1; continue
-            hit = False
-            for (qs, qw, qn, qe) in _quarters(s, w, n_, e):
-                d2 = _overpass(_osm_query(qs, qw, qn, qe, cap), label + "/q", deadline=t_end)
-                if d2 is not None:
-                    hit = True; _osm_collect(d2, label, out)
-                time.sleep(0.6)
-            if hit: ok += 1
-            else: to += 1
-            continue
-        ok += 1
-        _osm_collect(data, label, out)
+        if _osm_fetch_box(s, w, n_, e, cap, label, out, t_end):
+            ok += 1
+        else:
+            to += 1
         time.sleep(0.8)
     print("  osm shard %d/%d: %d sites (%d tiles ok, %d timed out, %d skipped for time)"
           % (k, n, len(out), ok, to, skipped))
@@ -2473,16 +2457,27 @@ def _osm_merge_parts():
             if s <= la < n and w <= lo < e: return True
         return False
 
-    if len(done_shards) >= nsh:
-        stale = len(prior)
-        prior = []                      # every tile refreshed: prior is fully superseded
-        print("  merge: all shards reported -- dropping %d prior OSM entries "
-              "(fully superseded by this run's filters)" % stale)
-    elif prior:
+    # Preserve-on-zero PER TILE: keep prior OSM data ONLY for 5-degree tiles that
+    # produced NO fresh data this run (a dense tile that timed out even after
+    # subdividing, or a genuinely empty one). Tiles that DID return fresh data are
+    # authoritative and replace their prior. This is what stops a timed-out tile
+    # (e.g. dense Western Europe) from wiping to an empty box.
+    import math as _math
+    def _tk(la, lo):
+        return (int(_math.floor(la / 5.0)) * 5, int(_math.floor(lo / 5.0)) * 5)
+    fresh_tiles = set()
+    for q in fresh:
+        la, lo = q.get("lat"), q.get("lng")
+        if la is not None and lo is not None:
+            fresh_tiles.add(_tk(la, lo))
+    if prior:
         before = len(prior)
-        prior = [q for q in prior if not _in_covered(q)]
-        print("  merge: kept %d of %d prior OSM entries (only tiles no shard covered)"
-              % (len(prior), before))
+        prior = [q for q in prior
+                 if q.get("lat") is not None and q.get("lng") is not None
+                 and _tk(q["lat"], q["lng"]) not in fresh_tiles]
+        print("  merge: kept %d of %d prior OSM entries (tiles with no fresh data "
+              "this run -> prevents empty boxes); %d tiles had fresh data"
+              % (len(prior), before, len(fresh_tiles)))
 
     if not fresh and not prior:
         print("  merge: nothing fresh and nothing to keep -- leaving OSM empty")
