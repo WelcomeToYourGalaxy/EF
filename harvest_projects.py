@@ -415,6 +415,7 @@ _GEM_TRACKERS = [
     ("solar",          "renewable", "solar",      "solar farm",           "https://globalenergymonitor.org/projects/global-solar-power-tracker/"),
     ("hydro",          "renewable", "hydropower", "hydropower project",   "https://globalenergymonitor.org/projects/global-hydropower-tracker/"),
     ("giomt",          "industry",  "ironore",    "iron ore mine",        "https://globalenergymonitor.org/projects/global-iron-ore-mine-tracker/"),
+    ("gist",           "industry",  "steel",      "iron & steel plant",   "https://globalenergymonitor.org/projects/global-iron-and-steel-tracker/"),
 ]
 
 def _gem_read_config(slug):
@@ -435,7 +436,8 @@ def _gem_read_config(slug):
         "csv":      g(r"""csv\s*:\s*['"]([^'"]+)['"]"""),
         "name":     g(r"""nameField\s*:\s*['"]([^'"]+)['"]""", "name"),
         "country":  g(r"""countryField\s*:\s*['"]([^'"]+)['"]"""),
-        "status":   g(r"""field\s*:\s*['"]([^'"]+)['"]""", "status"),   # color.field = status field
+        "status":   (g(r"""statusField\s*:\s*['"]([^'"]+)['"]""")
+                     or g(r"""field\s*:\s*['"]([^'"]+)['"]""", "status")),  # prefer statusField; else color.field
         "capacity": g(r"""capacityField\s*:\s*['"]([^'"]+)['"]"""),
         "caplabel": (g(r"""capacityLabel\s*:\s*['"]([^'"]*)['"]""", "") or "").strip("() "),
     }
@@ -1548,69 +1550,100 @@ def _ceq_latlng(s):
 
 def fetch_ceqanet():
     import csv as _csv, io as _io
-    seen = {}
-    out = []
-    queries = [None] + list(_CEQ_TYPE_QUERIES)     # plain latest-100 + per-type latest-100
-    for dt in queries:
-        url = CEQANET_CSV + (("&DocumentType=" + dt) if dt else "")
+    seen = {}; seen_sch = set(); out = []
+    geo_used = [0]; GEO_CAP = 40                    # cap address-geocoding per run
+
+    def _row_to_project(row, force_keep=False):
+        sch = (row.get("SCH Number") or "").strip()
+        if not sch: return None
+        doc_url = (row.get("Document Portal URL") or "").strip()
+        dtype = (row.get("Document Type") or "").strip().upper()
+        key = doc_url or (sch + "|" + dtype)
+        if key in seen: return None
+        ll = _ceq_latlng(row.get("Location Coordinates")); precise = True
+        if not ll and geo_used[0] < GEO_CAP:        # no coordinates in record -> geocode the address
+            city = (row.get("Cities") or "").split(";")[0].strip()
+            cross = (row.get("Location Cross Streets") or "").strip()
+            zipc = (row.get("Location Zip Code") or "").strip()
+            q = None
+            if cross and (city or zipc):
+                st = re.split(r"\s+(?:and|&|/|at|,)\s+", cross, maxsplit=1)[0].strip()
+                q = "%s, %sCA %s" % (st, (city + ", ") if city else "", zipc)
+            elif city:
+                q = "%s, CA %s" % (city, zipc)
+            if q:
+                geo_used[0] += 1
+                g = _geocode_place(q, cc="us")
+                if g and 32.3 <= g[0] <= 42.3 and -124.6 <= g[1] <= -113.9:
+                    ll = g; precise = False
+        if not ll: return None                      # still no location -> skip
+        title = (row.get("Project Title") or row.get("Document Title") or "CEQA project").strip()
+        devtype = (row.get("NOC Development Type") or "").strip()
+        gate_text = " ".join([title, row.get("Document Description") or "", devtype])
+        acres = _num(row.get("Location Total Acres"))
+        if not force_keep:
+            if _TRIVIAL_RE.search(gate_text):
+                return None                         # cosmetic / private work, whatever the type
+            if dtype not in _CEQ_SUBSTANTIVE:
+                if not ((acres is not None and acres >= 3) or _permit_is_significant(gate_text, None)):
+                    return None                     # NOE/other: keep only sizeable projects
+        seen[key] = 1; seen_sch.add(sch)
+        agency = (row.get("Lead Agency Name") or row.get("Lead Agency Title") or "").strip()
+        city = (row.get("Cities") or "").strip()
+        county = (row.get("Counties") or "").strip()
+        place = ""
+        if city or county:
+            place = " (%s%s)" % (city or county, (", " + county) if (city and county) else "")
+        label = _CEQ_DOCLABEL.get(dtype, dtype or "CEQA document")
+        p = {
+            "name": title[:140],
+            "type": devtype or "development",
+            "state": "California",
+            "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": precise,
+            "value_usd": None, "acres": acres,
+            "size": ("%g ac" % acres) if acres else "",
+            "status": label,
+            "company": "",
+            "url": doc_url or ("https://ceqanet.lci.ca.gov/Project/" + sch),
+            "desc": ("California CEQA filing (%s) with the State Clearinghouse by %s%s. "
+                     "A filing means a decision is in progress -- open the CEQAnet record "
+                     "for the documents, then check the lead agency's agenda for the hearing "
+                     "and public-comment deadlines.%s" %
+                     (label, agency or "a lead agency", place,
+                      "" if precise else " Location approximate (geocoded from the listed address).")),
+            "source": "ceqanet",
+        }
+        p["impact"] = rate_project(p)
+        return p
+
+    def _pull(url, tag, force_keep=False, one_per_sch=False):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
                 raw = r.read().decode("utf-8-sig", "replace")
         except Exception as e:
-            print("  ceqanet %s: %s" % (dt or "latest", e)); continue
+            print("  ceqanet %s: %s" % (tag, e)); return 0
         if "SCH Number" not in raw[:120]:
-            continue                               # HTML/error, not CSV -- skip this query
+            return 0                                # HTML/error, not CSV
         try:
             rdr = _csv.DictReader(_io.StringIO(raw))
         except Exception as e:
-            print("  ceqanet %s: parse %s" % (dt or "latest", e)); continue
+            print("  ceqanet %s: parse %s" % (tag, e)); return 0
+        n = 0
         for row in rdr:
-            sch = (row.get("SCH Number") or "").strip()
-            doc_url = (row.get("Document Portal URL") or "").strip()
-            dtype = (row.get("Document Type") or "").strip().upper()
-            key = doc_url or (sch + "|" + dtype)
-            if not sch or key in seen:
-                continue
-            ll = _ceq_latlng(row.get("Location Coordinates"))
-            if not ll:
-                continue                           # keep only geocodable records (solid dots)
-            title = (row.get("Project Title") or row.get("Document Title") or "CEQA project").strip()
-            devtype = (row.get("NOC Development Type") or "").strip()
-            gate_text = " ".join([title, row.get("Document Description") or "", devtype])
-            acres = _num(row.get("Location Total Acres"))
-            if _TRIVIAL_RE.search(gate_text):
-                continue                           # cosmetic / private work, whatever the type
-            if dtype not in _CEQ_SUBSTANTIVE:
-                if not ((acres is not None and acres >= 3) or _permit_is_significant(gate_text, None)):
-                    continue                       # NOE/other: keep only sizeable projects
-            seen[key] = 1
-            agency = (row.get("Lead Agency Name") or row.get("Lead Agency Title") or "").strip()
-            city = (row.get("Cities") or "").strip()
-            county = (row.get("Counties") or "").strip()
-            place = ""
-            if city or county:
-                place = " (%s%s)" % (city or county, (", " + county) if (city and county) else "")
-            label = _CEQ_DOCLABEL.get(dtype, dtype or "CEQA document")
-            p = {
-                "name": title[:140],
-                "type": devtype or "development",
-                "state": "California",
-                "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": True,
-                "value_usd": None, "acres": acres,
-                "size": ("%g ac" % acres) if acres else "",
-                "status": label,
-                "company": "",
-                "url": doc_url or ("https://ceqanet.lci.ca.gov/Project/" + sch),
-                "desc": ("California CEQA filing (%s) with the State Clearinghouse by %s%s. "
-                         "A filing means a decision is in progress -- open the CEQAnet record "
-                         "for the documents, then check the lead agency's agenda for the hearing "
-                         "and public-comment deadlines." %
-                         (label, agency or "a lead agency", place)),
-                "source": "ceqanet",
-            }
-            p["impact"] = rate_project(p)
-            out.append(p)
+            if one_per_sch and (row.get("SCH Number") or "").strip() in seen_sch:
+                continue                            # already have a pin for this project
+            p = _row_to_project(row, force_keep=force_keep)
+            if p:
+                out.append(p); n += 1
+                if one_per_sch:
+                    break                           # one pin per watchlisted project
+        return n
+
+    # rolling live window: plain latest-100 + per-type latest-100 (auto-catches new
+    # filings); records without coordinates are geocoded from their listed address
+    for dt in [None] + list(_CEQ_TYPE_QUERIES):
+        _pull(CEQANET_CSV + (("&DocumentType=" + dt) if dt else ""), dt or "latest")
     return out
 
 # ---------------------------------------------------------------------------
@@ -1750,9 +1783,12 @@ def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
         for f in (gj.get("features") or []):
             try:
                 geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
-                if geom.get("type") != "Point" or len(c) < 2:
-                    continue
-                lng, lat = float(c[0]), float(c[1])
+                if geom.get("type") == "Point" and len(c) >= 2:
+                    lng, lat = float(c[0]), float(c[1]); _hub_precise = True
+                else:                                # polygon/line (parcel or boundary) -> centroid
+                    ctr = _geom_center(geom)
+                    if not ctr: continue
+                    lat, lng = ctr; _hub_precise = False
                 props = f.get("properties") or {}
                 val = None
                 for k, v in props.items():
@@ -1778,7 +1814,7 @@ def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
                         if _dt: break
                 p = {"name": str(nm or attrs.get("name") or "Permitted project")[:140],
                      "type": "New construction", "state": "", "date": _dt,
-                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": _hub_precise,
                      "size": size, "value_usd": (float(val) if val else None),
                      "status": "Permit on file", "company": "",
                      "url": "https://hub.arcgis.com/datasets/" + str(d.get("id") or ""),
@@ -1822,24 +1858,35 @@ def fetch_ukplanit(days=180, pg_sz=200):
         params = {"bbox": bb, "start_date": since, "end_date": today,
                   "pg_sz": pg_sz, "limit": pg_sz}
         url = "https://www.planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
-                "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                gj = json.loads(r.read().decode("utf-8", "replace"))
-            feats += gj.get("features", []) if isinstance(gj, dict) else []
-        except Exception as e:
-            errs += 1
-            if errs == 1: print("  uk planit tile error: %s" % e)
+        # retry each tile a few times before giving up -- a single transient timeout
+        # used to drop a whole ~1.5deg cell of Britain and leave a persistent hole.
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
+                    "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                    gj = json.loads(r.read().decode("utf-8", "replace"))
+                feats += gj.get("features", []) if isinstance(gj, dict) else []
+                break
+            except Exception as e:
+                if attempt == 2:
+                    errs += 1
+                    if errs == 1: print("  uk planit tile error (after retries): %s" % e)
+                else:
+                    time.sleep(1.0 * (attempt + 1))
         time.sleep(0.4)
     print("  uk planit: %d applications across %d tiles (%d tile errors)" % (len(feats), len(tiles), errs))
     out = []; skipped = 0
     for f in feats:
         try:
             geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
-            if geom.get("type") != "Point" or len(c) < 2: continue
-            lng, lat = float(c[0]), float(c[1])
+            if geom.get("type") == "Point" and len(c) >= 2:
+                lng, lat = float(c[0]), float(c[1]); _uk_precise = True
+            else:                                  # polygon/line boundary -> centroid
+                ctr = _geom_center(geom)
+                if not ctr: continue
+                lat, lng = ctr; _uk_precise = False
             pr = f.get("properties") or {}
             desc = pr.get("description") or "Planning application"
             addr = pr.get("address") or ""
@@ -1860,7 +1907,7 @@ def fetch_ukplanit(days=180, pg_sz=200):
                 skipped += 1; continue
             p = {"name": str(desc)[:140], "type": "Development (UK planning)",
                  "state": pr.get("authority_name") or "United Kingdom",
-                 "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                 "lat": round(lat, 5), "lng": round(lng, 5), "precise": _uk_precise,
                  "size": pr.get("app_size") or "", "status": state, "company": "",
                  "url": pr.get("link") or "https://planit.org.uk/",
                  "date": _iso_date(pr.get("start_date") or pr.get("date_received")),
@@ -2421,6 +2468,179 @@ def fetch_portugal_eia():
 
 
 # ---------------------------------------------------------------------------
+# Chile -- SEIA (Sistema de Evaluacion de Impacto Ambiental). The Environmental
+# Assessment Service (SEA) publishes a georeferenced public layer of every project
+# entering environmental assessment. VERIFIED live (ArcGIS MapServer):
+#   https://arcgisv11.sea.gob.cl/server/rest/services/WEBServices/ProyectosSEIA/MapServer
+# Layer 1 = EIA (Estudios de Impacto Ambiental -- the MAJOR projects: mines, dams,
+# power, ports) which is what communities organise around; layer 2 = DIA (smaller
+# declarations). Point geometry, SR 3857 (query outSR=4326). Fields (verified):
+# NOMBRE_PROYECTO, ESTADO_EVALUACION, REGION, TITULAR, INVERSION_US (US$ millions),
+# NOMBRE_TIPOLOGIA, FECHA_PRESENTACION, FECHA_CALIFICACION, URL_EXPEDIENTE.
+# Scope gate: keep only in-process -- "En Calificacion" (under evaluation, any date)
+# and recently "Aprobado" (approved within ~36 months, i.e. the build pipeline);
+# drop Rechazado/Desistido/No Admitido/Caducado/Revocado/etc. Fail-safe: an
+# unrecognised state is dropped, never included.
+# ---------------------------------------------------------------------------
+CHILE_SEIA_EIA = ("https://arcgisv11.sea.gob.cl/server/rest/services/"
+                  "WEBServices/ProyectosSEIA/MapServer/1/query")
+
+def fetch_chile_seia(pages=6, per=2000, approved_months=36):
+    import json as _json
+    out = []
+    cutoff = (time.time() - approved_months * 2629800) * 1000.0     # ms epoch, ~36 mo
+    for pg in range(pages):
+        params = {"where": "1=1", "outFields": "*", "f": "geojson",
+                  "outSR": "4326", "orderByFields": "FECHA_PRESENTACION DESC",
+                  "resultRecordCount": per, "resultOffset": pg * per}
+        try:
+            gj = _get_json(CHILE_SEIA_EIA + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            print("  chile seia: page %d failed: %s" % (pg, e)); break
+        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+        if not feats:
+            break
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") != "Point" or len(c) < 2:
+                    continue
+                lng, lat = float(c[0]), float(c[1])
+                pr = f.get("properties") or {}
+                estado = str(pr.get("ESTADO_EVALUACION") or "").strip().lower()
+                # in-process gate (accent-insensitive substring; fail-safe)
+                keep = False
+                if "calific" in estado and "no calific" not in estado and "descalific" not in estado:
+                    keep = True                                    # En Calificacion (under evaluation)
+                elif "aprobad" in estado:
+                    fc = _num(pr.get("FECHA_CALIFICACION"))
+                    keep = (fc is not None and fc >= cutoff)       # approved, recently only
+                if not keep:
+                    continue
+                inv = _num(pr.get("INVERSION_US"))                 # US$ millions
+                val = inv * 1e6 if inv else None
+                name = str(pr.get("NOMBRE_PROYECTO") or "Proyecto SEIA").strip()[:140]
+                region = str(pr.get("REGION") or "").strip()
+                comunas = str(pr.get("COMUNAS") or "").strip()
+                place = comunas or region
+                url = str(pr.get("URL_EXPEDIENTE") or "").strip()
+                p = {"name": name,
+                     "type": str(pr.get("NOMBRE_TIPOLOGIA") or "Proyecto (EIA)").strip()[:60],
+                     "state": ("Chile" + ((" \u2014 " + region) if region else "")),
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                     "value_usd": val, "size": "",
+                     "status": (pr.get("ESTADO_EVALUACION") or "").strip(),
+                     "company": str(pr.get("TITULAR") or "").strip()[:80],
+                     "url": url or "https://seia.sea.gob.cl/",
+                     "date": _iso_date(pr.get("FECHA_PRESENTACION")),
+                     "desc": ("Chilean project under national environmental assessment (SEIA) "
+                              "%s%s. An EIA (Estudio de Impacto Ambiental) is filed for the largest "
+                              "projects -- mines, dams, power, ports. Open the expediente for the "
+                              "documents, the public-comment period and the evaluating authority." %
+                              (("in " + place) if place else "",
+                               (" \u2014 investment US$%s" % format(int(val), ",")) if val else "")),
+                     "source": "chile_seia"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        if len(feats) < per:
+            break
+    print("  chile seia: %d in-process EIA projects" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Peru -- SENACE (Servicio Nacional de Certificacion Ambiental). SENACE evaluates
+# the environmental impact studies of the largest investment projects (mining,
+# hydrocarbons, energy, transport). Its GeoSENACE ArcGIS server publishes a public
+# point layer of the environmental-management instruments SUBMITTED FOR EVALUATION
+# and certification. VERIFIED the service exists (ArcGIS MapServer, SR 4326, point
+# layer): https://geosenace.senace.gob.pe/arcgis/rest/services/DGE/IGA_SENACE/MapServer/0
+# The server blocks automated readers (robots), so the exact field NAMES could not
+# be confirmed from here -- like Portugal, fields are therefore detected at RUNTIME
+# by a Spanish-language sniffer rather than hardcoded/guessed. Scope: this layer is
+# projects under evaluation / certification (an active national EIA registry, like
+# IBAMA/ANLA), so keep-all minus records whose status is clearly finished-dead
+# (desaprobado / no conforme / archivado / desistido / denegado). FIRST-RUN REVIEW.
+# ---------------------------------------------------------------------------
+PERU_SENACE = ("https://geosenace.senace.gob.pe/arcgis/rest/services/"
+               "DGE/IGA_SENACE/MapServer/0/query")
+_PE_DEAD = ("desaprob", "no conforme", "archivad", "desist", "denegad", "rechaz",
+            "abandonad", "caducad", "no admit")
+
+def fetch_peru_senace(pages=6, per=1000):
+    out = []
+    def pick(keys, *subs):
+        for k in keys:
+            kl = k.lower()
+            if any(s in kl for s in subs): return k
+        return None
+    for pg in range(pages):
+        params = {"where": "1=1", "outFields": "*", "f": "geojson",
+                  "outSR": "4326", "resultRecordCount": per, "resultOffset": pg * per}
+        try:
+            gj = _get_json(PERU_SENACE + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            print("  peru senace: page %d failed: %s" % (pg, e)); break
+        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+        if not feats:
+            break
+        # detect the useful columns once, from the first feature's keys
+        keys = list((feats[0].get("properties") or {}).keys())
+        k_name = pick(keys, "nombre", "proyecto")
+        k_stat = pick(keys, "estado", "situacion", "situaci\u00f3n", "evaluaci")
+        k_type = pick(keys, "tipo", "instrumento", "iga")
+        k_titl = pick(keys, "titular", "empresa", "proponente")
+        k_inv  = pick(keys, "inversion", "inversi\u00f3n", "monto")
+        k_url  = pick(keys, "url", "expediente", "enlace", "link")
+        k_place = pick(keys, "region", "departamento", "distrito", "provincia", "ubica")
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") == "Point" and len(c) >= 2:
+                    lng, lat = float(c[0]), float(c[1]); precise = True
+                else:
+                    ctr = _geom_center(geom)
+                    if not ctr: continue
+                    lat, lng = ctr; precise = False
+                pr = f.get("properties") or {}
+                status = str(pr.get(k_stat) or "").strip() if k_stat else ""
+                if status and any(d in status.lower() for d in _PE_DEAD):
+                    continue                                   # clearly finished/dead -> drop
+                name = (str(pr.get(k_name)).strip()[:140] if k_name and pr.get(k_name)
+                        else "Proyecto SENACE")
+                inv = _num(pr.get(k_inv)) if k_inv else None
+                val = inv * 1e6 if (inv and inv < 1e6) else inv  # SENACE reports US$ millions
+                place = str(pr.get(k_place)).strip() if k_place and pr.get(k_place) else ""
+                url = str(pr.get(k_url)).strip() if k_url and pr.get(k_url) else ""
+                p = {"name": name,
+                     "type": (str(pr.get(k_type)).strip()[:60] if k_type and pr.get(k_type)
+                              else "Instrumento de gesti\u00f3n ambiental"),
+                     "state": ("Peru" + ((" \u2014 " + place) if place else "")),
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": precise,
+                     "value_usd": val, "size": "",
+                     "status": status,
+                     "company": (str(pr.get(k_titl)).strip()[:80] if k_titl and pr.get(k_titl) else ""),
+                     "url": url or "https://www.gob.pe/senace",
+                     "desc": ("Peruvian investment project under national environmental "
+                              "certification (SENACE)%s. SENACE evaluates the environmental "
+                              "impact studies of the country's largest mining, hydrocarbons, "
+                              "energy and transport projects. Open the record for the study, "
+                              "the public-participation process and the evaluating authority." %
+                              ((" in " + place) if place else ""))}
+                p["source"] = "peru_senace"
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        if len(feats) < per:
+            break
+    print("  peru senace: %d SENACE projects" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Land Matrix -- global large-scale land acquisitions ("land grabs"), ~2,300
 # concluded transnational deals >=200 ha across ~97 countries (agriculture,
 # forestry, mining, renewable-energy land, industry, speculation, tourism).
@@ -2721,10 +2941,12 @@ def _quarters(s, w, n, e):
     ms, mw = (s + n) / 2.0, (w + e) / 2.0
     return [(s, w, ms, mw), (s, mw, ms, e), (ms, w, n, mw), (ms, mw, n, e)]
 
-def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=2):
+def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=4):
     """Fetch one tile; on a server-side timeout, recursively split into quarters
-    (up to max_depth extra levels: 5deg -> 2.5deg -> 1.25deg) so DENSE regions
-    (Western Europe, East Asia) actually fill in instead of leaving empty boxes.
+    (up to max_depth extra levels: 5deg -> 2.5 -> 1.25 -> 0.625 -> 0.3125deg) so the
+    DENSEST regions (Randstad, Ruhr, Tokyo, Seoul, coastal China) actually fill in
+    instead of leaving empty boxes. Earlier this stopped at 1.25deg, which still
+    timed out over the biggest metros and left permanent grid holes there.
     Returns True if any data landed for this box."""
     if deadline and time.time() > deadline:
         return False
@@ -2840,7 +3062,9 @@ def fetch_osm_construction(cap=3000, tiles_per_run=410):
     # twice a week, so a day-based offset would skip parts of the grid entirely.
     run_ix = datetime.date.today().toordinal() // 3
     offset = run_ix % stride
-    todo = [grid[i] for i in range(offset, len(grid), stride)][:nslice]
+    # NB: no [:nslice] truncation -- that dropped the tail of each strided slice, so
+    # the highest-index tiles in each residue class were never queried on any run.
+    todo = [grid[i] for i in range(offset, len(grid), stride)]
     print("  osm: grid of %d tiles; this run does %d, strided every %d (offset %d) "
           "-> spread worldwide" % (len(grid), len(todo), stride, offset))
     out = _osm_existing()
@@ -3586,6 +3810,8 @@ def main():
     items += _run("ibama_br", fetch_ibama_br)
     items += _run("ireland_planning", fetch_ireland_planning)          # Ireland national planning DB (size-gated)
     items += _run("portugal_eia", fetch_portugal_eia)              # Portugal national EIA processes (APA/SNIAmb)                   # Brazil federal environmental licences
+    items += _run("chile_seia", fetch_chile_seia)                  # Chile SEIA -- major EIA projects under evaluation (SEA)
+    items += _run("peru_senace", fetch_peru_senace)                # Peru SENACE -- major projects under environmental certification
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
     items += _run("land_matrix", fetch_land_matrix)               # GLOBAL: large-scale land acquisitions (Land Matrix, country-level)
