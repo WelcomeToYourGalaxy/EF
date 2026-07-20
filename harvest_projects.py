@@ -129,6 +129,15 @@ def _num(x):
     try: return float(x)
     except (TypeError, ValueError): return None
 
+def _money(x):
+    """Parse a currency value that may be numeric or a string like '$5,000,000.00'."""
+    if x is None: return None
+    if isinstance(x, (int, float)): return float(x)
+    s = str(x).strip().replace("$", "").replace(",", "").replace(" ", "")
+    if s in ("", "-", "."): return None
+    try: return float(s)
+    except ValueError: return None
+
 def _first(row, *names):
     for n in names:
         if n in row and row[n] not in (None, ""): return row[n]
@@ -142,6 +151,11 @@ def _first(row, *names):
 # then add to SOCRATA_CITIES. The three below are the PATTERN -- verify the
 # dataset ids and field names against each portal before trusting them.
 SOCRATA_CITIES = [
+    # Honolulu, HI -- verified dataset id 4vab-c87q on data.honolulu.gov (Socrata).
+    # Columns weren't fetchable at build time, so this uses heuristic mode: the
+    # harvester reads the live schema and self-maps lat/lng/value/date/status.
+    {"city": "Honolulu, HI", "domain": "data.honolulu.gov", "dataset": "4vab-c87q",
+     "heuristic": True, "limit": 5000},
     # --- VERIFIED (dataset id + field names confirmed against live CSV headers) ---
     # The $-value filter surfaces SIGNIFICANT projects (big developments), not every
     # roof/deck permit. Tune the threshold and date as you like.
@@ -157,6 +171,24 @@ SOCRATA_CITIES = [
      "lat": "latitude", "lng": "longitude", "name": "description", "type": "permitclassmapped",
      "value": "estprojectcost", "status": "statuscurrent",
      "where": "estprojectcost > 5000000 AND issueddate > '2025-01-01'"},
+    # Cincinnati, OH -- verified against live CSV headers (dataset dy5r-w456):
+    # LATITUDE/LONGITUDE, ESTPROJECTCOSTDEC, STATUSCURRENT, ISSUEDDATE, DESCRIPTION.
+    {"city": "Cincinnati, OH", "domain": "data.cincinnati-oh.gov", "dataset": "dy5r-w456",
+     "lat": "latitude", "lng": "longitude", "name": "description", "type": "permittypemapped",
+     "value": "estprojectcostdec", "status": "statuscurrent",
+     "where": "estprojectcostdec > 5000000 AND issueddate > '2025-01-01'"},
+
+    # New York, NY -- BIS "DOB Job Application Filings" (ic3t-wcy2). Confirmed geo
+    # columns gis_latitude/gis_longitude + initial_cost/job_description/job_type.
+    # initial_cost is a TEXT "$" field, so the value floor is enforced Python-side
+    # (min_value) rather than in $where; the $where filters by recent action date.
+    # NB: BIS is being superseded by DOB NOW (which lacks coords); this captures
+    # jobs with recent activity. First Actions run will confirm the date $where.
+    {"city": "New York, NY", "domain": "data.cityofnewyork.us", "dataset": "ic3t-wcy2",
+     "lat": "gis_latitude", "lng": "gis_longitude", "name": "job_description",
+     "type": "job_type", "value": "initial_cost", "min_value": 5000000,
+     "status": "job_status_descrp", "limit": 5000, "order": "latest_action_date DESC",
+     "where": "latest_action_date > '2025-01-01'"},
 
     # SF: coords live in a `location` POINT column (verified against live CSV).
     {"city": "San Francisco, CA", "domain": "data.sfgov.org", "dataset": "i98e-djp9",
@@ -176,6 +208,36 @@ SOCRATA_CITIES = [
     # NYC: permits are split across DOB NOW + historical datasets and need lat/lng joined
     # from BIN/BBL -- add once you pick the geocoded dataset.
 ]
+
+def _socrata_detect(row):
+    """Given one sample Socrata record, guess the column API-names for each role
+    (lat/lng or point, name, type, value, date, status) by name/value pattern.
+    Lets a city be added from a VERIFIED (domain, dataset-id) alone -- no guessed
+    column names -- with the harvester reading the real schema at run time."""
+    keys = list(row.keys()); low = {k: k.lower() for k in keys}
+    det = {}
+    def find(pred):
+        for k in keys:
+            if pred(low[k], row.get(k)): return k
+        return None
+    for k in keys:                                   # point column
+        v = row.get(k); lk = low[k]
+        if isinstance(v, dict) and (v.get("coordinates") or (v.get("latitude") and v.get("longitude"))):
+            det["point"] = k; break
+        if isinstance(v, str) and v.upper().startswith("POINT"):
+            det["point"] = k; break
+        if lk in ("location", "the_geom", "georeference", "geocoded_column", "point", "location_1"):
+            det["point"] = k; break
+    det["lat"] = find(lambda lk, v: lk == "latitude" or lk in ("lat", "gis_latitude", "point_latitude", "y_coordinate") or lk.endswith("_latitude"))
+    det["lng"] = find(lambda lk, v: lk == "longitude" or lk in ("lng", "lon", "long", "gis_longitude", "point_longitude", "x_coordinate") or lk.endswith("_longitude"))
+    det["value"] = find(lambda lk, v: "id" not in lk and "unit" not in lk and ("valuation" in lk or "estprojectcost" in lk or "estimated_cost" in lk or "reported_cost" in lk or "job_cost" in lk or (("cost" in lk or "value" in lk) and "valuation" not in lk)))
+    det["date"] = find(lambda lk, v: ("issue" in lk and "date" in lk) or lk in ("issued_date", "issue_date", "issueddate", "permit_issue_date", "date_issued", "issued"))
+    det["status"] = find(lambda lk, v: "status" in lk)
+    det["name"] = (find(lambda lk, v: lk in ("description", "work_description", "job_description", "proposedworkdescription", "desc_of_work", "descriptionofwork", "scope_of_work"))
+                   or find(lambda lk, v: "description" in lk or "scope" in lk))
+    det["type"] = (find(lambda lk, v: lk in ("permit_type", "permittype", "type", "permit_class", "permitclass", "job_type", "permittypemapped", "permitclassmapped", "permit_type_definition"))
+                   or find(lambda lk, v: "permit" in lk and "type" in lk))
+    return {k: v for k, v in det.items() if v}
 
 def _socrata_point(r, cfg):
     """Return (lat,lng). Some cities (SF, LA) use a point column instead of
@@ -199,7 +261,29 @@ def _socrata_point(r, cfg):
 def fetch_socrata(cfg, limit=500):
     out = []
     base = "https://{d}/resource/{ds}.json".format(d=cfg["domain"], ds=cfg["dataset"])
-    params = {"$limit": limit, "$order": ":id"}
+    if cfg.get("heuristic"):                         # self-detect columns from a live sample
+        cfg = dict(cfg)
+        try:
+            probe = _get_json(base + "?$limit=1")
+        except Exception as e:
+            print("  socrata %s probe failed: %s" % (cfg.get("city"), e)); return out
+        if not probe:
+            print("  socrata %s: empty probe" % cfg.get("city")); return out
+        det = _socrata_detect(probe[0])
+        print("  socrata %s auto-detected columns: %s" % (cfg.get("city"), det))
+        for k, v in det.items(): cfg.setdefault(k, v)
+        vcol, dcol = cfg.get("value"), cfg.get("date")
+        if not cfg.get("where"):                     # bound + significance from detected cols
+            clauses = []
+            if dcol: clauses.append("%s > '2024-01-01'" % dcol)
+            if vcol:
+                sv = probe[0].get(vcol)
+                if isinstance(sv, (int, float)) or (isinstance(sv, str) and sv.replace(".", "", 1).replace("-", "", 1).isdigit()):
+                    clauses.append("%s > 5000000" % vcol)      # only if numeric (text-$ handled below)
+            if clauses: cfg["where"] = " AND ".join(clauses)
+        if dcol and not cfg.get("order"): cfg["order"] = dcol + " DESC"
+        if cfg.get("min_value") is None: cfg["min_value"] = 5000000   # python-side floor (handles text-$)
+    params = {"$limit": cfg.get("limit", limit), "$order": cfg.get("order", ":id")}
     if cfg.get("where"): params["$where"] = cfg["where"]
     url = base + "?" + urllib.parse.urlencode(params)
     try:
@@ -207,14 +291,19 @@ def fetch_socrata(cfg, limit=500):
     except Exception as e:
         print("  socrata %s failed: %s" % (cfg.get("city"), e)); return out
     _DONE = ("complete", "closed", "expired", "withdrawn", "cancel", "final",
-             "void", "revoked", "stop work", "inactive", "issued - closed", "certificate of occupancy")
+             "void", "revoked", "stop work", "inactive", "issued - closed",
+             "certificate of occupancy", "signed off", "sign-off")
     for r in rows:
         lat, lng = _socrata_point(r, cfg)
         if lat is None or lng is None: continue
         _st = str(r.get(cfg.get("status")) or "").lower()
         if any(k in _st for k in _DONE):   # drop projects that are no longer active
             continue
-        val = _num(r.get(cfg.get("value")))
+        val = _money(r.get(cfg.get("value")))
+        mv = cfg.get("min_value")
+        if mv is not None and (val is None or val < mv):
+            continue        # value floor enforced here for cities whose cost column
+                            # is text ($-prefixed) and can't be filtered server-side
         p = {"name": r.get(cfg["name"]) or "Permitted project",
              "type": r.get(cfg.get("type")) or "development",
              "state": cfg["city"].split(",")[-1].strip(),
@@ -229,39 +318,73 @@ def fetch_socrata(cfg, limit=500):
     return out
 
 # ----------------------------------------------------------------------------
-# SOURCE 2 -- Land Matrix (public API)                           [GLOBAL]
 # ----------------------------------------------------------------------------
-# Land Matrix exposes deal data via API. Confirm the current endpoint/shape at
-# https://landmatrix.org/ (they have a REST/GraphQL interface). Sketch:
-def fetch_land_matrix(csv_path="data/land_matrix_deals.csv"):
-    """Large-scale land acquisitions WITH coordinates.
-    Get the CSV from datahub.io/core/land-matrix (weekly auto-updated) or the
-    Land Matrix API export and save it to data/land_matrix_deals.csv. Export
-    column names vary, so several aliases are tried."""
-    import csv, os
+# AUTO-DISCOVERY -- Socrata cross-domain Discovery API                [US LOCAL]
+# ----------------------------------------------------------------------------
+# Instead of hand-adding cities one by one, query Socrata's Discovery API for
+# every building/construction-permit dataset across all portals and harvest each
+# through the heuristic path. Strong quality gates keep it high-signal: the
+# dataset NAME must read like building/construction permits (aggregates/dashboards
+# excluded), it must be fresh, and each permit must have coordinates AND clear the
+# $5M value floor (enforced inside fetch_socrata). Isolated source group so it can
+# be reviewed / toggled independently of the hand-curated cities. CAPPED to bound
+# runtime. Runs on Actions (which can reach api.us.socrata.com); sandbox cannot.
+_DISCOVERY_CAP = 40
+_DISCOVERY_PORTAL_CAP = 400      # max significant permits kept per discovered portal (flood guard)
+_DISCOVERY_TOTAL_CAP = 5000      # max significant permits kept per discovery engine
+def fetch_socrata_discovered(max_datasets=_DISCOVERY_CAP):
+    import re, datetime, urllib.parse
+    disc = "http://api.us.socrata.com/api/catalog/v1?" + urllib.parse.urlencode(
+        {"q": "building permits", "only": "dataset", "limit": 250})
+    try:
+        cat = _get_json(disc)
+    except Exception as e:
+        print("  socrata discovery failed: %s" % e); return []
+    results = cat.get("results", []) if isinstance(cat, dict) else []
+    configured = {c.get("domain") for c in SOCRATA_CITIES}
+    skip_domains = configured | {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org",
+                                 "data.cityofchicago.org", "data.seattle.gov", "data.cityofnewyork.us",
+                                 "data.cincinnati-oh.gov"}
+    cutoff = (datetime.date.today() - datetime.timedelta(days=550)).isoformat()
+    NAMEOK = re.compile(r'permit', re.I)
+    KIND = re.compile(r'\b(building|construction|development)\b', re.I)
+    BAD = re.compile(r'count|summ|metric|monthly|annual|aggregate|dashboard|by year|statistic|'
+                     r'trade|electrical|plumbing|mechanical|sign\b|solar|roof|demolition only|fee', re.I)
+    picked = []; seen = set()
+    for r in results:
+        res = r.get("resource", {}) or {}; meta = r.get("metadata", {}) or {}
+        did = res.get("id", ""); name = res.get("name", "") or ""; domain = meta.get("domain", "") or ""
+        updated = (res.get("updatedAt") or res.get("data_updated_at") or "")[:10]
+        if not did or not domain or domain in skip_domains: continue
+        if not (NAMEOK.search(name) and KIND.search(name)) or BAD.search(name): continue
+        if updated and updated < cutoff: continue                   # stale -> skip
+        key = (domain, did)
+        if key in seen: continue
+        seen.add(key)
+        picked.append({"city": domain, "domain": domain, "dataset": did,
+                       "heuristic": True, "limit": 3000, "_name": name})
+        if len(picked) >= max_datasets: break
+    print("  socrata discovery: %d fresh permit datasets to probe" % len(picked))
     out = []
-    if not os.path.exists(csv_path):
-        print("  land matrix: %s not found (skip)" % csv_path); return out
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            lat = _num(_first(row, "point_lat", "latitude", "lat", "deal_lat"))
-            lng = _num(_first(row, "point_lon", "longitude", "lng", "lon", "deal_lon"))
-            if lat is None or lng is None: continue
-            ha = _num(_first(row, "deal_size", "size", "intended_size", "contract_size"))
-            p = {"name": (_first(row, "deal_name", "name") or "Large land acquisition")[:120],
-                 "type": _first(row, "current_intention_of_investment", "intention", "intended_use") or "land deal",
-                 "state": _first(row, "target_country", "country") or "",
-                 "lat": lat, "lng": lng, "acres": ha * 2.471 if ha else None,
-                 "company": _first(row, "operating_company", "investor", "operating_company_name") or "",
-                 "status": _first(row, "negotiation_status", "current_negotiation_status") or "",
-                 "size": ("%s ha" % int(ha)) if ha else "",
-                 "desc": "Large-scale land acquisition tracked by Land Matrix. Verify status "
-                         "and investor, then check for community-consent and land-rights issues.",
-                 "source": "land_matrix"}
-            p["impact"] = rate_project(p, sensitivity=1)
-            out.append(p)
-    print("  land matrix: %d deals" % len(out))
+    for cfg in picked:
+        try:
+            rows = fetch_socrata(dict(cfg))               # heuristic detect + $5M gate inside
+        except Exception as e:
+            print("  discovery %s failed: %s" % (cfg["domain"], e)); continue
+        if len(rows) > _DISCOVERY_PORTAL_CAP:
+            print("    ! %s capped %d->%d" % (cfg["domain"], len(rows), _DISCOVERY_PORTAL_CAP)); rows = rows[:_DISCOVERY_PORTAL_CAP]
+        for p in rows: p["source"] = "socrata_discovered:" + cfg["domain"]
+        if rows: print("    + %-32s %4d permits (%s)" % (cfg["domain"], len(rows), cfg["_name"][:40]))
+        out += rows
+        if len(out) >= _DISCOVERY_TOTAL_CAP:
+            print("  socrata discovery: total cap %d hit, stopping" % _DISCOVERY_TOTAL_CAP); out = out[:_DISCOVERY_TOTAL_CAP]; break
+    print("  socrata discovery: %d significant permits from %d portals" % (len(out), len(picked)))
     return out
+
+# ----------------------------------------------------------------------------
+# (Land Matrix now lives further down as a LIVE auto-pulling source built from
+#  the datasets/land-matrix GitHub mirror -- see fetch_land_matrix().)
+# ----------------------------------------------------------------------------
 
 # ----------------------------------------------------------------------------
 # SOURCE 3 -- Global Energy Monitor trackers                     [ENERGY INFRA]
@@ -271,77 +394,215 @@ def fetch_land_matrix(csv_path="data/land_matrix_deals.csv"):
 # read with pandas, keep US rows with coords, map columns -> normalized dict.
 # only NEW / upcoming energy projects -- never operating or retired infrastructure
 _GEM_NEW = ("announced", "pre-construction", "preconstruction", "construction",
-            "proposed", "permitted", "in development", "planned")
+            "proposed", "permitted", "pre-permit", "in development", "planned")
 _GEM_DEAD = ("operating", "retired", "cancelled", "canceled", "mothballed",
-             "shelved", "closed", "abandoned", "decommissioned")
+             "shelved", "closed", "abandoned", "decommissioned", "shut in",
+             "discovered")            # "discovered" (goget) = resource found, not a project yet
 
-def _gem_norm(pr, lat, lng):
+_GEM_TRACKERS = [
+    # (config slug, category, source suffix, human label, tracker landing page)
+    # category drives the map toggle: fossil / renewable / industry
+    ("coal-plant",     "fossil",    "coal",       "coal power plant",     "https://globalenergymonitor.org/projects/global-coal-plant-tracker/"),
+    ("coal-mine",      "fossil",    "coalmine",   "coal mine",            "https://globalenergymonitor.org/projects/global-coal-mine-tracker/"),
+    ("ggit",           "fossil",    "gas",        "gas infrastructure",   "https://globalenergymonitor.org/projects/global-gas-infrastructure-tracker/"),
+    ("GOIT",           "fossil",    "oil",        "oil infrastructure",   "https://globalenergymonitor.org/projects/global-oil-infrastructure-tracker/"),
+    ("gas-plant",      "fossil",    "gasplant",   "gas power plant",      "https://globalenergymonitor.org/projects/global-gas-plant-tracker/"),
+    ("goget",          "fossil",    "extraction", "oil & gas extraction", "https://globalenergymonitor.org/projects/global-oil-gas-extraction-tracker/"),
+    ("coal-terminals", "fossil",    "coalterm",   "coal terminal",        "https://globalenergymonitor.org/projects/global-coal-terminals-tracker/"),
+    ("nuclear",        "renewable", "nuclear",    "nuclear power plant",  "https://globalenergymonitor.org/projects/global-nuclear-power-tracker/"),
+    ("geothermal",     "renewable", "geothermal", "geothermal power plant","https://globalenergymonitor.org/projects/global-geothermal-power-tracker/"),
+    ("wind",           "renewable", "wind",       "wind farm",            "https://globalenergymonitor.org/projects/global-wind-power-tracker/"),
+    ("solar",          "renewable", "solar",      "solar farm",           "https://globalenergymonitor.org/projects/global-solar-power-tracker/"),
+    ("hydro",          "renewable", "hydropower", "hydropower project",   "https://globalenergymonitor.org/projects/global-hydropower-tracker/"),
+    ("giomt",          "industry",  "ironore",    "iron ore mine",        "https://globalenergymonitor.org/projects/global-iron-ore-mine-tracker/"),
+]
+
+def _gem_read_config(slug):
+    """Read a GEM map tracker's live config.js (production branch) and return its
+    current data URL (geojson OR csv) + the field names that tracker uses. GEM
+    rewrites config.js on every release, so this auto-follows to the newest data
+    with no manual step. Field names come from the config, never guessed."""
+    import urllib.request
+    url = ("https://raw.githubusercontent.com/GlobalEnergyMonitor/maps/"
+           "gitpages-production/trackers/%s/config.js" % slug)
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=45) as r:
+        txt = r.read().decode("utf-8", "replace")
+    def g(pat, default=None):
+        m = re.search(pat, txt); return m.group(1) if m else default
+    return {
+        "geojson":  g(r"""geojson\s*:\s*['"]([^'"]+)['"]"""),
+        "csv":      g(r"""csv\s*:\s*['"]([^'"]+)['"]"""),
+        "name":     g(r"""nameField\s*:\s*['"]([^'"]+)['"]""", "name"),
+        "country":  g(r"""countryField\s*:\s*['"]([^'"]+)['"]"""),
+        "status":   g(r"""field\s*:\s*['"]([^'"]+)['"]""", "status"),   # color.field = status field
+        "capacity": g(r"""capacityField\s*:\s*['"]([^'"]+)['"]"""),
+        "caplabel": (g(r"""capacityLabel\s*:\s*['"]([^'"]*)['"]""", "") or "").strip("() "),
+    }
+
+def _gem_status_ok(status):
+    """In-process gate, fail-safe: keep ONLY announced/proposed/pre-permit/permitted/
+    construction/in-development; drop operating/retired/cancelled/etc.; anything
+    unrecognized is dropped (never included). Underscore-normalized so GOGET's
+    'in_development' matches, and 'discovered'/'shut_in' fall to _GEM_DEAD."""
+    s = str(status or "").strip().lower().replace("_", " ")
+    if any(k in s for k in _GEM_DEAD): return False
+    return any(k in s for k in _GEM_NEW)
+
+def _gem_feature(pr, lat, lng, fld, label, source, landing):
+    """Build one project dict from a mapped record. fld = {name,country,status,
+    capacity,caplabel} of the ACTUAL keys for this tracker (config fields for
+    geojson, detected columns for csv)."""
     if lat is None or lng is None: return None
-    status = str(_first(pr, "Status", "status") or "").strip().lower()
-    # keep only projects that are upcoming/under construction (not existing infra)
-    if any(k in status for k in _GEM_DEAD): return None
-    if not any(k in status for k in _GEM_NEW): return None
-    name = _first(pr, "Project Name", "project_name", "Unit Name", "Name",
-                  "Pipeline Name", "Mine Name")
-    typ = _first(pr, "Type", "Fuel", "Category", "Sector") or "energy project"
-    st = _first(pr, "Subnational unit (province/state)", "State/Province", "State", "Region")
-    ctry = _first(pr, "Country/Area", "Country")
-    mw = _num(_first(pr, "Capacity (MW)", "Capacity", "capacity_mw"))
-    p = {"name": (name or "Energy project")[:120], "type": str(typ),
-         "state": st or ctry or "", "lat": lat, "lng": lng, "mw": mw, "precise": True,
-         "company": _first(pr, "Owner", "Parent", "Operator") or "",
-         "status": _first(pr, "Status", "status") or "",
-         "size": ("%s MW" % int(mw)) if mw else "",
-         "desc": ("Proposed / under-construction energy project tracked by Global Energy "
-                  "Monitor (CC BY 4.0). Status: " + (status or "unknown") + "."),
-         "source": "gem"}
+    raw_status = pr.get(fld["status"]) if fld.get("status") else ""
+    if not _gem_status_ok(raw_status): return None
+    status = str(raw_status or "").strip().lower().replace("_", " ")
+    name = pr.get(fld["name"]) if fld.get("name") else None
+    ctry = pr.get(fld["country"]) if fld.get("country") else ""
+    if ctry: ctry = str(ctry).strip().strip(";").strip()
+    cap = _num(pr.get(fld["capacity"])) if fld.get("capacity") else None
+    unit = fld.get("caplabel") or ""
+    size = ("%s %s" % ("{:,}".format(int(cap)), unit)).strip() if cap else ""
+    url = ""
+    for k, v in pr.items():
+        if isinstance(v, str) and v.startswith("http"): url = v.strip(); break
+    def _ci(*keys):                        # case-insensitive owner/operator lookup (csv headers vary)
+        lk = {str(k).lower(): v for k, v in pr.items()}
+        for want in keys:
+            if lk.get(want): return lk[want]
+        return ""
+    p = {"name": (str(name) or label)[:130], "type": label[0].upper() + label[1:],
+         "state": str(ctry or "")[:60], "lat": lat, "lng": lng, "precise": True,
+         "value_usd": None,
+         "company": str(_ci("owner", "parent", "operator") or "")[:80],
+         "status": str(raw_status or ""), "size": size,
+         "url": url or landing,
+         "desc": ("Proposed or under-construction %s tracked by Global Energy Monitor "
+                  "(status: %s). Pulled live from GEM's tracker map data." % (label, status or "unknown")),
+         "source": source}
     p["impact"] = rate_project(p, sensitivity=1)
     return p
 
-def fetch_gem(dir_path="data/gem"):
-    """Global Energy Monitor trackers (coal/oil/gas/pipelines/LNG/mines/steel/...),
-    all carrying coordinates. Download the tracker(s) from
-    globalenergymonitor.org/download-data (CC-BY 4.0) OR generate per-country
-    GeoJSON with the open-energy-transition/gem_per_country tool, and drop the
-    files (.csv / .xlsx / .geojson) into data/gem/."""
-    import os, glob, json as _json, csv
+def _gem_read_csv(url):
+    """Fetch a GEM tracker CSV and return list-of-dicts. Handles UTF-8, UTF-8-BOM
+    and UTF-16 (GOGET is UTF-16) via byte-order-mark sniffing."""
+    import urllib.request, csv as _csv, io
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        raw = r.read()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):   enc = "utf-16"
+    elif raw[:3] == b"\xef\xbb\xbf":            enc = "utf-8-sig"
+    else:                                       enc = "utf-8"
+    txt = raw.decode(enc, "replace")
+    return list(_csv.DictReader(io.StringIO(txt)))
+
+def _gem_csv_fields(cols):
+    """Runtime column detection for a GEM CSV -- headers differ from the geojson
+    field names (e.g. 'Project Name'/'Status'/'Capacity (MW)'), so match by pattern,
+    case-insensitively, rather than trusting the config's geojson field names."""
+    low = {c.lower(): c for c in cols}
+    def pick(exacts, contains=None, exclude=()):
+        for e in exacts:
+            if e in low: return low[e]
+        if contains:
+            for c in cols:
+                cl = c.lower()
+                if contains in cl and not any(x in cl for x in exclude): return c
+        return None
+    capcol = pick({"capacity (mw)", "capacity"}, "capacity")
+    unit = ""
+    if capcol:
+        m = re.search(r"\(([^)]+)\)", capcol)
+        if m: unit = m.group(1).strip()
+    return {
+        "lat":     pick({"lat", "latitude", "y"}),
+        "lng":     pick({"lng", "lon", "long", "longitude", "x"}),
+        "status":  pick({"status"}, "status"),
+        "name":    pick({"project name", "unit_name", "unit name", "name", "wiki-name",
+                         "coal-terminal-name"}, "name", exclude=("local language", "phase", "script")),
+        "country": pick({"country", "country/area", "areas"}, "countr"),
+        "capacity": capcol,
+        "caplabel": unit,
+    }
+
+def _gem_csv_url(cfg_csv, slug):
+    """Resolve a tracker's csv value to a fetchable URL. Full https URLs are used
+    as-is (e.g. coal-terminals -> DigitalOcean CDN). A relative filename ('data.csv',
+    'GOGET_...csv') is committed to the maps repo *main* branch (not the production
+    deploy branch), so resolve it there -- raw-reachable and auto-updating."""
+    if not cfg_csv: return None
+    if cfg_csv.lower().startswith("http"): return cfg_csv
+    return ("https://raw.githubusercontent.com/GlobalEnergyMonitor/maps/"
+            "main/trackers/%s/%s" % (slug, cfg_csv.lstrip("./")))
+
+def fetch_gem():
+    """Global Energy Monitor -- proposed / under-construction energy & industry
+    projects worldwide, grouped for the map into fossil (coal plants+mines, gas, oil,
+    gas plants, extraction, coal terminals), renewable (wind, solar, hydro, nuclear,
+    geothermal) and industry (iron-ore mines). Fully auto-pulling: each tracker's
+    live config.js (GEM maps production branch) gives the current data URL + field
+    names, so it follows every GEM release. geojson data sits on GEM's CDN; csv data
+    sits on the repo main branch. Only pipeline-stage projects are kept; operating/
+    retired/cancelled are excluded (fail-safe gate)."""
+    import urllib.request, json as _json
     out = []
-    if not os.path.isdir(dir_path):
-        print("  gem: %s not found (skip)" % dir_path); return out
-    for path in glob.glob(os.path.join(dir_path, "*")):
-        low = path.lower()
+    for slug, cat, suf, label, landing in _GEM_TRACKERS:
+        source = "gem_%s:%s" % (cat, suf)
         try:
-            if low.endswith((".geojson", ".json")):
-                geo = _json.load(open(path, encoding="utf-8"))
-                for ft in geo.get("features", []):
-                    g = ft.get("geometry") or {}; pr = ft.get("properties") or {}
-                    if g.get("type") != "Point": continue
-                    c = g.get("coordinates") or []
-                    if len(c) >= 2:
-                        p = _gem_norm(pr, _num(c[1]), _num(c[0]))
-                        if p: out.append(p)
-            elif low.endswith(".csv"):
-                for r in csv.DictReader(open(path, newline="", encoding="utf-8")):
-                    lat = _num(_first(r, "Latitude", "latitude", "lat"))
-                    lng = _num(_first(r, "Longitude", "longitude", "lng", "lon"))
-                    p = _gem_norm(r, lat, lng)
-                    if p: out.append(p)
-            elif low.endswith(".xlsx"):
-                import openpyxl
-                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-                for ws in wb.worksheets:
-                    rows = ws.iter_rows(values_only=True); hdr = next(rows, None)
-                    if not hdr: continue
-                    idx = {str(h).strip(): i for i, h in enumerate(hdr) if h}
-                    for r in rows:
-                        pr = {k: r[i] for k, i in idx.items() if i < len(r)}
-                        lat = _num(_first(pr, "Latitude", "latitude"))
-                        lng = _num(_first(pr, "Longitude", "longitude"))
-                        p = _gem_norm(pr, lat, lng)
-                        if p: out.append(p)
+            cfg = _gem_read_config(slug)
         except Exception as e:
-            print("  gem %s failed: %s" % (path, e))
-    print("  gem: %d projects" % len(out))
+            print("  gem %s: config fetch failed: %s" % (slug, e)); continue
+        gj = cfg.get("geojson"); csvv = cfg.get("csv")
+        n = 0
+        if gj and gj.lower().endswith(".geojson"):
+            try:
+                req = urllib.request.Request(gj, headers={"User-Agent": UA})
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    geo = _json.loads(r.read().decode("utf-8", "replace"))
+            except Exception as e:
+                print("  gem %s: geojson fetch failed: %s" % (slug, e)); continue
+            fld = {"name": cfg.get("name"), "country": cfg.get("country"),
+                   "status": cfg.get("status"), "capacity": cfg.get("capacity"),
+                   "caplabel": cfg.get("caplabel")}
+            for ft in (geo.get("features", []) if isinstance(geo, dict) else []):
+                try:
+                    g = ft.get("geometry") or {}; pr = ft.get("properties") or {}
+                    if g.get("type") == "Point":
+                        c = g.get("coordinates") or []
+                        if len(c) < 2: continue
+                        la, lo = _num(c[1]), _num(c[0])
+                    else:                                # LineString/Polygon (pipelines) -> centroid
+                        ctr = _geom_center(g)
+                        if not ctr: continue
+                        la, lo = ctr
+                    p = _gem_feature(pr, la, lo, fld, label, source, landing)
+                    if p: out.append(p); n += 1
+                except Exception:
+                    continue
+            print("  gem %s: %d pipeline features (%s)" % (slug, n, gj.rsplit("/", 1)[-1]))
+        elif csvv:
+            url = _gem_csv_url(csvv, slug)
+            try:
+                rows = _gem_read_csv(url)
+            except Exception as e:
+                print("  gem %s: csv fetch failed: %s" % (slug, e)); continue
+            if not rows:
+                print("  gem %s: csv empty (skip)" % slug); continue
+            fld = _gem_csv_fields(list(rows[0].keys()))
+            if not (fld["lat"] and fld["lng"]):
+                print("  gem %s: csv coord columns not found (skip)" % slug); continue
+            for row in rows:
+                try:
+                    la, lo = _num(row.get(fld["lat"])), _num(row.get(fld["lng"]))
+                    if la is None or lo is None: continue
+                    p = _gem_feature(row, la, lo, fld, label, source, landing)
+                    if p: out.append(p); n += 1
+                except Exception:
+                    continue
+            print("  gem %s: %d pipeline rows (%s)" % (slug, n, url.rsplit("/", 1)[-1]))
+        else:
+            print("  gem %s: no data url in config (skip)" % slug); continue
+    print("  gem: %d total pipeline projects across %d trackers" % (len(out), len(_GEM_TRACKERS)))
     return out
 
 # EPA EIS (cdxapps EIS database), FERC eLibrary API, EJAtlas export: same shape --
@@ -1183,6 +1444,14 @@ _HUB_QUERIES = [
     ("pozwolenie na budowe", "pozwolenie"), ("byggetillatelse", "bygge"),
     ("bygglov", "bygglov"), ("rakennuslupa", "rakennus"),
     ("development permits", "permit"), ("zoning applications", "zoning"),
+    # additional development-application types (English)
+    ("site plan applications", "site plan"), ("rezoning applications", "rezoning"),
+    ("subdivision applications", "subdivision"),
+    # additional permit languages (each still runs through the significance gate)
+    ("stavebni povoleni", "stavebn"), ("stavebne povolenie", "stavebn"),
+    ("yapi ruhsati", "ruhsat"), ("autorizatie de construire", "autoriza"),
+    ("epitesi engedely", "epitesi"), ("izin mendirikan bangunan", "izin"),
+    ("permiso de construccion", "permiso"), ("oikodomiki adeia", "adeia"),
 ]
 
 # ---- significance gate for permit feeds -----------------------------------
@@ -1221,6 +1490,210 @@ def _permit_is_significant(text, value, big=5000000, floor=1000000):
     if value is not None:
         return value >= floor
     return bool(_SIGNIF_RE.search(t))     # no value published: type must be significant
+
+# ---------------------------------------------------------------------------
+# CEQAnet -- California CEQA/NEPA environmental filings (State Clearinghouse).
+# VERIFIED: https://ceqanet.lci.ca.gov/Search?OutputFormat=CSV returns CSV with
+# columns incl. "Location Coordinates" (DMS), "Location Total Acres",
+# "Document Type", "Document Portal URL", "Cities", "Counties". Plain /Search
+# returns the latest 100; &DocumentType=<code> narrows it (best-effort -- if the
+# param is ignored we simply re-see the latest 100 and dedupe). This catches
+# small-city California projects (design-review permits, EIRs, subdivisions,
+# specific plans) that NO building-permit feed carries -- the Sierra Madre gap.
+# California-only, but California is ~12% of the US and files ~13k CEQA docs/yr.
+# ---------------------------------------------------------------------------
+CEQANET_CSV = "https://ceqanet.lci.ca.gov/Search?OutputFormat=CSV"
+# Substantive environmental-review docs are kept in full; NOE/other are gated
+# through the shared significance filter so trivial exemptions (re-roofs, tree
+# removals) are dropped but sizeable projects (e.g. a 42-home subdivision) stay.
+_CEQ_SUBSTANTIVE = {"EIR","EIS","FIS","SBE","SIR","SIS","SEA","NOP","MND","NEG","FIN"}
+_CEQ_TYPE_QUERIES = ["EIR","EIS","NOP","MND","NEG","SBE","SIR","NOD","NOE","FIN"]
+_CEQ_DOCLABEL = {
+    "EIR":"Draft EIR","EIS":"Draft EIS","FIS":"Final EIS","FIN":"Final document",
+    "SBE":"Subsequent EIR","SIR":"Supplemental EIR","SIS":"Revised/Supplemental EIS",
+    "SEA":"Supplemental EIR","NOP":"Notice of Preparation","MND":"Mitigated Negative Declaration",
+    "NEG":"Negative Declaration","NOD":"Notice of Determination","NOE":"Notice of Exemption",
+    "NOC":"Notice of Completion","NOI":"Notice of Intent",
+}
+
+def _ceq_latlng(s):
+    """Parse CEQAnet 'Location Coordinates'. Handles DMS (34d10'18.5"N 118d3'51.4"W,
+    where the degree glyph may arrive mojibaked) and a decimal fallback. Returns
+    (lat,lng) inside California's bounding box, else None."""
+    if not s:
+        return None
+    s = str(s)
+    dms = re.findall(r"(\d+(?:\.\d+)?)[^\d\n]+?(\d+(?:\.\d+)?)['\u2032]([\d.]+)[\"\u2033]?\s*([NSEW])", s)
+    lat = lng = None
+    for d, m, sec, hemi in dms:
+        try:
+            v = float(d) + float(m)/60.0 + float(sec)/3600.0
+        except ValueError:
+            continue
+        if hemi in ("N","S"):
+            lat = -v if hemi == "S" else v
+        elif hemi in ("E","W"):
+            lng = -v if hemi == "W" else v
+    if lat is None or lng is None:
+        dec = re.findall(r"-?\d+\.\d+", s)
+        if len(dec) >= 2:
+            lat = float(dec[0]); lng = float(dec[1])
+            if lng > 0:
+                lng = -lng                       # California is western hemisphere
+    if lat is None or lng is None:
+        return None
+    if 32.3 <= lat <= 42.3 and -124.6 <= lng <= -113.9:
+        return (lat, lng)
+    return None
+
+def fetch_ceqanet():
+    import csv as _csv, io as _io
+    seen = {}
+    out = []
+    queries = [None] + list(_CEQ_TYPE_QUERIES)     # plain latest-100 + per-type latest-100
+    for dt in queries:
+        url = CEQANET_CSV + (("&DocumentType=" + dt) if dt else "")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                raw = r.read().decode("utf-8-sig", "replace")
+        except Exception as e:
+            print("  ceqanet %s: %s" % (dt or "latest", e)); continue
+        if "SCH Number" not in raw[:120]:
+            continue                               # HTML/error, not CSV -- skip this query
+        try:
+            rdr = _csv.DictReader(_io.StringIO(raw))
+        except Exception as e:
+            print("  ceqanet %s: parse %s" % (dt or "latest", e)); continue
+        for row in rdr:
+            sch = (row.get("SCH Number") or "").strip()
+            doc_url = (row.get("Document Portal URL") or "").strip()
+            dtype = (row.get("Document Type") or "").strip().upper()
+            key = doc_url or (sch + "|" + dtype)
+            if not sch or key in seen:
+                continue
+            ll = _ceq_latlng(row.get("Location Coordinates"))
+            if not ll:
+                continue                           # keep only geocodable records (solid dots)
+            title = (row.get("Project Title") or row.get("Document Title") or "CEQA project").strip()
+            devtype = (row.get("NOC Development Type") or "").strip()
+            gate_text = " ".join([title, row.get("Document Description") or "", devtype])
+            acres = _num(row.get("Location Total Acres"))
+            if _TRIVIAL_RE.search(gate_text):
+                continue                           # cosmetic / private work, whatever the type
+            if dtype not in _CEQ_SUBSTANTIVE:
+                if not ((acres is not None and acres >= 3) or _permit_is_significant(gate_text, None)):
+                    continue                       # NOE/other: keep only sizeable projects
+            seen[key] = 1
+            agency = (row.get("Lead Agency Name") or row.get("Lead Agency Title") or "").strip()
+            city = (row.get("Cities") or "").strip()
+            county = (row.get("Counties") or "").strip()
+            place = ""
+            if city or county:
+                place = " (%s%s)" % (city or county, (", " + county) if (city and county) else "")
+            label = _CEQ_DOCLABEL.get(dtype, dtype or "CEQA document")
+            p = {
+                "name": title[:140],
+                "type": devtype or "development",
+                "state": "California",
+                "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": True,
+                "value_usd": None, "acres": acres,
+                "size": ("%g ac" % acres) if acres else "",
+                "status": label,
+                "company": "",
+                "url": doc_url or ("https://ceqanet.lci.ca.gov/Project/" + sch),
+                "desc": ("California CEQA filing (%s) with the State Clearinghouse by %s%s. "
+                         "A filing means a decision is in progress -- open the CEQAnet record "
+                         "for the documents, then check the lead agency's agenda for the hearing "
+                         "and public-comment deadlines." %
+                         (label, agency or "a lead agency", place)),
+                "source": "ceqanet",
+            }
+            p["impact"] = rate_project(p)
+            out.append(p)
+    return out
+
+# ---------------------------------------------------------------------------
+# Washington State SEPA Register -- state environmental-review filings.
+# VERIFIED: Socrata dataset https://data.wa.gov/resource/mmcb-z6jf.json exposes
+# sitelatitudedecimal / sitelongitudedecimal (~26k geocoded records), plus
+# proposaldescription, documenttypecode (EIS/MDNS/DNS/DS/SCOPING/...),
+# leadagencyname, sitecityname and leadagencyissuedate. This is Washington's
+# analogue of California's CEQA -- it catches small-city and county projects
+# (subdivisions, EIS-level developments) that no building-permit feed carries.
+# Reuses the same anonymous Socrata access as the SF/LA permit sources.
+# ---------------------------------------------------------------------------
+WA_SEPA_RES = "https://data.wa.gov/resource/mmcb-z6jf.json"
+# Substantive review documents kept in full; DNS/ODNS ("determination of NON-
+# significance") are gated through the shared significance filter.
+_WASEPA_SUBSTANTIVE = {"EIS","DEIS","FEIS","SEIS","MDNS","DS","SCOPING","ADDEND"}
+_WASEPA_DOCLABEL = {
+    "EIS":"Environmental Impact Statement","DEIS":"Draft EIS","FEIS":"Final EIS",
+    "SEIS":"Supplemental EIS","MDNS":"Mitigated Determination of Nonsignificance",
+    "DNS":"Determination of Nonsignificance","ODNS":"Optional DNS",
+    "ODNS/NOA":"Optional DNS / Notice of Application","ODNS-M":"Optional Mitigated DNS",
+    "DS":"Determination of Significance","SCOPING":"EIS Scoping","ADDEND":"Addendum",
+    "CONSULT":"Agency Consultation",
+}
+# Routine SEPA filings that flood the register but aren't development threats.
+# (Kept separate from the shared _TRIVIAL_RE; also stops "Plant triploid grass
+# carp..." from matching the industrial-"plant" keyword in _SIGNIF_RE.)
+_WASEPA_TRIVIAL = re.compile(
+    r"(grass\s*carp|triploid|aquatic\s*veget|\bdock\b|bulkhead|boat\s*lift|"
+    r"\bfloat\b|\bpier\b|\bmooring\b|forest\s*practice|(harvest|thin)\w*\s*timber|"
+    r"timber\s*harvest|shoreline\s*exemption|fish\s*enhancement|\bculvert\b|"
+    r"single[-\s]*family\s*(residence|home|dwelling))", re.I)
+
+def fetch_wa_sepa(days=365, cap=5000):
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    where = ("sitelatitudedecimal IS NOT NULL AND "
+             "leadagencyissuedate > '%sT00:00:00'" % cutoff)
+    params = {"$where": where, "$order": "leadagencyissuedate DESC", "$limit": cap}
+    url = WA_SEPA_RES + "?" + urllib.parse.urlencode(params)
+    try:
+        rows = _get_json(url)
+    except Exception as e:
+        print("  wa_sepa: %s" % e); return []
+    out = []
+    for r in rows:
+        lat = _num(r.get("sitelatitudedecimal")); lng = _num(r.get("sitelongitudedecimal"))
+        if lat is None or lng is None:
+            continue
+        if not (45.4 <= lat <= 49.1 and -125.0 <= lng <= -116.5):
+            continue                                   # outside WA -> bad coordinate, drop
+        dtype = (r.get("documenttypecode") or "").strip().upper()
+        name = (r.get("proposalname") or "").strip()
+        desc_raw = (r.get("proposaldescription") or "").strip()
+        gate = " ".join([name, desc_raw])
+        if _TRIVIAL_RE.search(gate):
+            continue                                   # sheds, remodels, interior work, etc.
+        if dtype not in _WASEPA_SUBSTANTIVE:
+            if _WASEPA_TRIVIAL.search(gate):
+                continue                               # WA routine: docks, grass carp, timber, shoreline
+            if not _permit_is_significant(gate, None):
+                continue                               # DNS/other: keep only significant types
+        title = name or (desc_raw[:70] + ("\u2026" if len(desc_raw) > 70 else "")) or "SEPA proposal"
+        agency = (r.get("leadagencyname") or "").strip()
+        city = (r.get("sitecityname") or "").strip()
+        label = _WASEPA_DOCLABEL.get(dtype, dtype or "SEPA filing")
+        p = {
+            "name": title[:140],
+            "type": "development",
+            "state": "Washington",
+            "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+            "value_usd": None, "acres": None, "size": "",
+            "status": label,
+            "company": (r.get("applicantname") or "").strip(),
+            "url": "https://apps.ecology.wa.gov/separ/Main/SEPA/Search.aspx",
+            "desc": ("Washington SEPA filing (%s) on the Dept. of Ecology register, lead agency %s%s. "
+                     "A SEPA filing means a decision is under way -- look the record up on the SEPA "
+                     "Register, then check the lead agency for the public-comment deadline." %
+                     (label, agency or "(unknown)", (" (%s)" % city) if city else "")),
+            "source": "wa_sepa",
+        }
+        p["impact"] = rate_project(p)
+        out.append(p)
+    return out
 
 def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
     ds = []; seen_ds = set()
@@ -1460,6 +1933,7 @@ _SRC_BOX = {
     # (south, north, west, east)
     "iaac_ca": (41.0, 84.0, -141.5, -52.0),          # Canada (no overseas territory)
     "epbc_au": (-90.0, -8.0, 44.0, 170.0),           # Australia + Antarctic/Indian/Pacific territories
+    "anla_co": (-4.5, 13.7, -82.2, -66.7),           # Colombia + San Andrés / Malpelo islands
 }
 
 # Fallback placement when a record's coordinates are clearly wrong: put it at the
@@ -1480,7 +1954,7 @@ _CA_PROV = {
     "SASKATCHEWAN": (54.0, -106.0), "SK": (54.0, -106.0),
     "YUKON": (63.0, -135.0), "YT": (63.0, -135.0),
 }
-_NAT_CENTER = {"iaac_ca": (56.13, -106.35), "epbc_au": (-25.27, 133.78)}
+_NAT_CENTER = {"iaac_ca": (56.13, -106.35), "epbc_au": (-25.27, 133.78), "anla_co": (4.57, -74.30)}
 
 def _fallback_center(src, region_text):
     """(lat, lng, label) for approximate placement, or None."""
@@ -1505,6 +1979,570 @@ def _box_ok(src, lat, lng):
     if not b: return True
     s, n, w, e = b
     return (lat is not None and lng is not None and s <= lat <= n and w <= lng <= e)
+
+# ---------------------------------------------------------------------------
+# Colombia -- ANLA (Autoridad Nacional de Licencias Ambientales). Projects under
+# national environmental licensing, in evaluation & monitoring. VERIFIED public
+# ArcGIS MapServer (no key): .../ANLA/ANLA/MapServer, layer 1 = "PROYECTOS EN
+# SEGUIMIENTO". Field names are discovered at runtime (printed on first run) and
+# mapped heuristically, exactly like the Canada/Australia ArcGIS sources. ANLA
+# only licenses major projects (mining, hydrocarbons, power, infrastructure), so
+# no significance gate is needed -- every record is a real, licence-scale project.
+# ---------------------------------------------------------------------------
+_CO_KEYS_SHOWN = []
+
+def fetch_anla_co():
+    base = "https://portalsig.anla.gov.co/publico/rest/services/ANLA/ANLA/MapServer"
+    feats = _arcgis_query_all(base, layer=1, label="anla co")
+    out = []; dropped = 0
+    for f in feats:
+        try:
+            pr = f.get("properties") or {}
+            up = {str(k).upper(): v for k, v in pr.items()}
+            if not out and not _CO_KEYS_SHOWN:
+                print("  anla co [fields]: %s" % sorted(list(pr.keys()))[:20])
+                _CO_KEYS_SHOWN.append(1)
+            _la = _num(up.get("LATITUD") or up.get("LATITUDE") or up.get("LAT") or up.get("Y"))
+            _lo = _num(up.get("LONGITUD") or up.get("LONGITUDE") or up.get("LON")
+                       or up.get("LNG") or up.get("X"))
+            ll = (_la, _lo) if (_la is not None and _lo is not None) else _geom_center(f.get("geometry") or {})
+            if not ll or ll[0] is None: continue
+            _approx = False; _note = ""
+            if not _box_ok("anla_co", ll[0], ll[1]):
+                fb = _fallback_center("anla_co", "")
+                if not fb:
+                    dropped += 1; continue
+                ll = (fb[0], fb[1]); _approx = True; dropped += 1
+                _note = (" Source coordinates were unusable \u2014 shown at the national "
+                         "level; open the ANLA registry for the exact site.")
+            nm = _best_name(pr, ("NOMBRE_PROYECTO", "NOMBREPROYECTO", "NOMBRE_DEL_PROYECTO",
+                                 "NOMBRE", "PROYECTO")) or "Proyecto ANLA"
+            sector = str(up.get("SECTOR") or up.get("SECTOR_ECONOMICO") or up.get("TIPO") or "")
+            status = str(up.get("ESTADO") or up.get("ESTADO_PROYECTO")
+                         or up.get("ESTADO_EXPEDIENTE") or "")
+            exp = str(up.get("EXPEDIENTE") or up.get("NUMERO_EXPEDIENTE") or up.get("CODIGO") or "")
+            company = str(up.get("TITULAR") or up.get("EMPRESA") or up.get("SOLICITANTE")
+                          or up.get("BENEFICIARIO") or "")[:80]
+            p = {
+                "name": str(nm)[:140],
+                "type": ("Environmental licence" + ((" \u00b7 " + sector) if sector else "")),
+                "state": "Colombia",
+                "lat": round(ll[0], 5), "lng": round(ll[1], 5), "precise": not _approx,
+                "value_usd": None, "acres": None, "size": "",
+                "status": status, "company": company,
+                "url": "https://www.anla.gov.co/",
+                "desc": ("Project under Colombian environmental licensing (ANLA)"
+                         + ((" \u00b7 sector " + sector) if sector else "")
+                         + ((" \u00b7 " + status) if status else "")
+                         + ((" \u00b7 exp. " + exp) if exp else "") + "." + _note +
+                         " ANLA licenses major projects (mining, hydrocarbons, power, "
+                         "infrastructure); open the registry for the licensing stage and "
+                         "any public-participation window."),
+                "source": "anla_co",
+            }
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  anla co: %d projects (%d re-placed at national level)" % (len(out), dropped))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Washington, D.C. -- Dept of Buildings construction permits, public ArcGIS
+# FeatureServer (no key). WGS84 LATITUDE/LONGITUDE attributes. DC publishes NO
+# construction valuation (FEES_PAID is only the permit fee), so significance is
+# TYPE-based: we keep NEW CONSTRUCTION and RAZE (demolition) -- the development /
+# displacement projects -- and skip supplemental trades and minor alterations.
+# Layer 4 = "Building Permits - Last 30 Days" (always current, small).
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tempe, AZ -- City of Tempe Building Safety permits (Accela export), public
+# ArcGIS FeatureServer (no key). WGS84 Latitude/Longitude, real EstProjectCost
+# valuation -> clean $5M significance gate. We keep only rows the data itself
+# marks OriginalCity = TEMPE, so the "Tempe" label is per-record correct even
+# though the layer's bbox spills a little into neighbouring Phoenix / Mesa.
+# Source confirmed as the City of Tempe Accela export via data.tempe.gov + data.gov.
+# ---------------------------------------------------------------------------
+_TEMPE_KEYS_SHOWN = [False]
+def fetch_tempe_permits():
+    base = "https://services.arcgis.com/lQySeXwbBg53XWDi/arcgis/rest/services/building_permits/FeatureServer"
+    feats = _arcgis_query_all(base, layer=0, label="tempe permits")
+    out = []
+    for f in feats:
+        try:
+            pr = f.get("properties") or {}
+            if not _TEMPE_KEYS_SHOWN[0]:
+                print("  tempe field keys:", sorted(pr.keys())); _TEMPE_KEYS_SHOWN[0] = True
+            up = {str(k).upper(): v for k, v in pr.items()}
+            if "TEMPE" not in str(up.get("ORIGINALCITY") or "").upper():
+                continue                                         # per-record jurisdiction guard
+            val = _money(up.get("ESTPROJECTCOST"))
+            if val is None or val < 5000000:
+                continue                                         # $5M+ significance (real valuation)
+            status = str(up.get("STATUSCURRENT") or "")
+            if any(k in status.lower() for k in ("complete", "void", "expired",
+                                                 "withdrawn", "cancel", "closed", "final")):
+                continue
+            la = _num(up.get("LATITUDE")); lo = _num(up.get("LONGITUDE"))
+            if la is None or lo is None or (abs(la) < 0.01 and abs(lo) < 0.01):
+                c = _geom_center(f.get("geometry"))
+                if c: la, lo = c
+            if la is None or lo is None:
+                continue
+            nm = str(up.get("PROJECTNAME") or up.get("DESCRIPTION")
+                     or up.get("TYPE") or "Tempe construction permit")[:140]
+            p = {
+                "name": nm,
+                "type": str(up.get("PERMITTYPEDESC") or up.get("TYPE") or "Building permit")[:80],
+                "state": "Arizona", "lat": round(la, 5), "lng": round(lo, 5), "precise": True,
+                "value_usd": val, "size": "", "status": status,
+                "company": str(up.get("CONTRACTORCOMPANYNAME") or "")[:80],
+                "url": "https://data.tempe.gov/", "date": _iso_date(up.get("ISSUEDDATE") or up.get("ISSUEDDATEDTM")),
+                "desc": ("City of Tempe building permit (est. cost $%s). Local construction filing; "
+                         "check the Tempe Community Development / Building Safety docket for review timing."
+                         % format(int(val), ",")),
+                "source": "tempe_permits",
+            }
+            p["impact"] = rate_project(p, sensitivity=0)
+            out.append(p)
+        except Exception:
+            continue
+    print("  tempe permits: %d permits >= $5M (OriginalCity=TEMPE)" % len(out))
+    return out
+
+
+# ===========================================================================
+# GENERIC ArcGIS building-permit harvester (heuristic column detection).
+# Twin of the Socrata heuristic path: given a VERIFIED FeatureServer url+layer,
+# it reads the live schema, self-maps lat/lng/value/date/status/type, and keeps
+# permits >= a value floor. Adding an ArcGIS permit city becomes: verify the
+# endpoint once, append one config dict to ARCGIS_PERMIT_CITIES. Value-gated
+# only -- a layer with NO cost field is HELD (returns 0) rather than flooded,
+# since type-based significance is city-specific and needs a bespoke fetch (cf. DC).
+# ===========================================================================
+def _arcgis_detect(props):
+    keys = list(props.keys()); up = {k: k.upper() for k in keys}
+    det = {}
+    def find(pred):
+        for k in keys:
+            if pred(up[k], props.get(k)): return k
+        return None
+    det["lat"] = find(lambda uk, v: uk == "LATITUDE" or uk in ("LAT", "GIS_LATITUDE", "POINT_Y", "Y") or uk.endswith("LATITUDE"))
+    det["lng"] = find(lambda uk, v: uk == "LONGITUDE" or uk in ("LNG", "LON", "LONG", "GIS_LONGITUDE", "POINT_X", "X") or uk.endswith("LONGITUDE"))
+    det["value"] = find(lambda uk, v: "ID" not in uk and "UNIT" not in uk and (
+        "ESTPROJECTCOST" in uk or "VALUATION" in uk or "ESTIMATEDCOST" in uk or "JOBVALUE" in uk
+        or "JOB_VALUE" in uk or "CONSTRUCTIONVALUE" in uk or (("COST" in uk or "VALUE" in uk) and "VALUATION" not in uk)))
+    det["date"] = find(lambda uk, v: ("ISSUE" in uk and "DATE" in uk) or uk in ("ISSUEDDATE", "ISSUE_DATE", "ISSUEDATE", "DATEISSUED"))
+    det["status"] = find(lambda uk, v: "STATUS" in uk)
+    det["name"] = (find(lambda uk, v: uk in ("PROJECTNAME", "DESCRIPTION", "DESC_OF_WORK", "DESCOFWORK", "WORKDESCRIPTION", "PROPOSEDWORKDESCRIPTION", "SCOPEOFWORK"))
+                   or find(lambda uk, v: "DESCRIPTION" in uk or ("WORK" in uk and "DESC" in uk)))
+    det["type"] = (find(lambda uk, v: uk in ("PERMITTYPEDESC", "PERMITTYPE", "PERMIT_TYPE", "TYPE", "PERMITCLASS", "WORKCLASS", "PERMITTYPEMAPPED"))
+                   or find(lambda uk, v: "PERMIT" in uk and "TYPE" in uk))
+    det["city"] = find(lambda uk, v: uk in ("ORIGINALCITY", "CITY", "MUNICIPALITY", "JURISDICTION"))
+    det["company"] = find(lambda uk, v: uk in ("CONTRACTORCOMPANYNAME", "CONTRACTOR", "CONTRACTORNAME", "OWNERNAME", "OWNER_NAME", "APPLICANT"))
+    return {k: v for k, v in det.items() if v}
+
+def _arcgis_project_from(pr, geom, det, cfg, floor):
+    """One project dict from an ArcGIS feature via detected field roles. None if
+    below the value floor, done/closed, or ungeocodable. Shared by the bespoke
+    city path and the discovery path so both behave identically."""
+    if not det.get("value"): return None
+    val = _money(pr.get(det["value"]))
+    if val is None or val < floor: return None
+    if det.get("status"):
+        st = str(pr.get(det["status"]) or "").lower()
+        if any(k in st for k in ("complete", "void", "expired", "withdrawn", "cancel", "closed", "final", "revoked")):
+            return None
+    la = _num(pr.get(det["lat"])) if det.get("lat") else None
+    lo = _num(pr.get(det["lng"])) if det.get("lng") else None
+    if la is None or lo is None or (abs(la) < 0.01 and abs(lo) < 0.01):
+        c = _geom_center(geom)
+        if c: la, lo = c
+    if la is None or lo is None: return None
+    nm = str((det.get("name") and pr.get(det["name"])) or (det.get("type") and pr.get(det["type"]))
+             or (cfg.get("city", "Permitted") + " project"))[:140]
+    p = {"name": nm, "type": str((det.get("type") and pr.get(det["type"])) or "Building permit")[:80],
+         "state": cfg.get("state", ""), "lat": round(la, 5), "lng": round(lo, 5), "precise": True,
+         "value_usd": val, "size": "", "status": str((det.get("status") and pr.get(det["status"])) or ""),
+         "company": str((det.get("company") and pr.get(det["company"])) or "")[:80],
+         "url": cfg.get("portal", ""), "date": _iso_date(det.get("date") and pr.get(det["date"])),
+         "desc": cfg.get("desc", "Local building permit ($%s+). Check the jurisdiction's planning docket for review timing." % format(int(floor), ",")),
+         "source": cfg["source"]}
+    p["impact"] = rate_project(p, sensitivity=0)
+    return p
+
+_ARCGIS_KEYS_SHOWN = {}
+def fetch_arcgis_permits(cfg):
+    src = cfg["source"]
+    feats = _arcgis_query_all(cfg["url"], layer=cfg.get("layer", 0), label=cfg.get("city", src))
+    out = []; det = None; floor = cfg.get("min_value", 5000000)
+    guard = (cfg.get("city_field_value") or "").upper()
+    for f in feats:
+        try:
+            pr = f.get("properties") or {}
+            if det is None:
+                det = _arcgis_detect(pr)
+                if not _ARCGIS_KEYS_SHOWN.get(src):
+                    print("  %s field keys: %s" % (src, sorted(pr.keys())))
+                    print("  %s auto-detected: %s" % (src, det)); _ARCGIS_KEYS_SHOWN[src] = True
+                if not det.get("value"):
+                    print("  %s: no cost/value field -> HELD (needs type-based bespoke fetch)" % src); return []
+            if guard:
+                cf = det.get("city")
+                if not cf or guard not in str(pr.get(cf) or "").upper(): continue
+            p = _arcgis_project_from(pr, f.get("geometry"), det, cfg, floor)
+            if p: out.append(p)
+        except Exception:
+            continue
+    print("  %s: %d permits >= $%s" % (src, len(out), format(int(floor), ",")))
+    return out
+
+# Verified (url, layer) ArcGIS permit endpoints. Each shares the "arcgis_city:" source
+# prefix -> one PJ_SRC group on the front end (like "socrata"). Append verified entries here.
+ARCGIS_PERMIT_CITIES = [
+    # TEMPLATE (verify url+layer carry a cost field + WGS84 coords before adding):
+    # {"source": "arcgis_city:denver", "city": "Denver, CO", "state": "Colorado",
+    #  "url": "https://.../FeatureServer", "layer": 0, "min_value": 5000000,
+    #  "portal": "https://denvergov.org/opendata"},
+]
+
+def _arcgis_discover_one(url, title, host, layer=0, floor=5000000):
+    """Probe one discovered Feature Service, detect fields, and pull $5M+ permits
+    with a SERVER-SIDE value filter + recent ordering so we never drag a full
+    permit history. Held (0) if no cost field or no coordinates."""
+    import urllib.parse
+    base = url.rstrip("/") + "/%d/query?" % layer
+    def q(where, order=None, count=1):
+        p = {"where": where, "outFields": "*", "outSR": "4326", "f": "geojson",
+             "resultRecordCount": count, "returnGeometry": "true"}
+        if order: p["orderByFields"] = order
+        return _get_json(base + urllib.parse.urlencode(p))
+    probe = q("1=1", count=1)
+    feats = (probe or {}).get("features", []) if isinstance(probe, dict) else []
+    if not feats: return []
+    det = _arcgis_detect(feats[0].get("properties") or {})
+    if not det.get("value"): return []                       # no cost field -> hold
+    vcol, dcol = det["value"], det.get("date")
+    sv = (feats[0].get("properties") or {}).get(vcol)
+    numeric = isinstance(sv, (int, float)) or (isinstance(sv, str) and sv.replace(".", "", 1).replace("-", "", 1).isdigit())
+    where = ("%s > %d" % (vcol, floor)) if numeric else "1=1"
+    data = q(where, order=(dcol + " DESC") if dcol else None, count=2000)
+    fs = (data or {}).get("features", []) if isinstance(data, dict) else []
+    cfg = {"source": "arcgis_discovered:" + host, "city": title, "state": "",
+           "portal": "https://" + host, "min_value": floor}
+    out = []
+    for f in fs:
+        p = _arcgis_project_from(f.get("properties") or {}, f.get("geometry"), det, cfg, floor)
+        if p: out.append(p)
+    return out[:_DISCOVERY_PORTAL_CAP]
+
+_ARCGIS_DISCOVERY_CAP = 25
+def fetch_arcgis_discovered(max_services=_ARCGIS_DISCOVERY_CAP):
+    """Find fresh building/construction-permit Feature Services via the ArcGIS
+    Online item-search API and harvest each ($5M-gated, coords-required). Twin of
+    the Socrata discovery source. Runs on Actions (reaches arcgis.com); sandbox cannot."""
+    import re, time, urllib.parse
+    q = 'title:"building permits" AND type:"Feature Service"'
+    search = "https://www.arcgis.com/sharing/rest/search?" + urllib.parse.urlencode(
+        {"f": "json", "q": q, "num": 100, "sortField": "modified", "sortOrder": "desc"})
+    try:
+        cat = _get_json(search)
+    except Exception as e:
+        print("  arcgis discovery search failed: %s" % e); return []
+    results = cat.get("results", []) if isinstance(cat, dict) else []
+    NAMEOK = re.compile(r'permit', re.I); KIND = re.compile(r'\b(building|construction|development)\b', re.I)
+    BAD = re.compile(r'count|summ|metric|monthly|annual|aggregate|dashboard|statistic|electrical|plumbing|'
+                     r'mechanical|solar|roof|\bsign\b|fee|parcel|zoning|address|inspection|violation|contractor', re.I)
+    cutoff = int((time.time() - 550 * 86400) * 1000)
+    bespoke = {c.get("url") for c in ARCGIS_PERMIT_CITIES}
+    picked = []; seen = set()
+    for r in results:
+        title = r.get("title", "") or ""; url = r.get("url", "") or ""
+        typ = r.get("type", ""); mod = r.get("modified", 0) or 0
+        if typ != "Feature Service" or not url or url in bespoke: continue
+        if "maps2.dcgis.dc.gov" in url or "building_permits/FeatureServer" in url: continue   # dedup DC/Tempe
+        if not (NAMEOK.search(title) and KIND.search(title)) or BAD.search(title): continue
+        if mod and mod < cutoff: continue
+        if url in seen: continue
+        seen.add(url)
+        host = urllib.parse.urlparse(url).netloc
+        picked.append({"title": title, "url": url, "host": host})
+        if len(picked) >= max_services: break
+    print("  arcgis discovery: %d candidate permit services" % len(picked))
+    out = []
+    for c in picked:
+        try:
+            rows = _arcgis_discover_one(c["url"], c["title"], c["host"])
+        except Exception as e:
+            print("  arcgis discovery %s failed: %s" % (c["host"], e)); continue
+        if rows: print("    + %-40s %4d permits (%s)" % (c["host"], len(rows), c["title"][:34]))
+        out += rows
+        if len(out) >= _DISCOVERY_TOTAL_CAP:
+            print("  arcgis discovery: total cap %d hit, stopping" % _DISCOVERY_TOTAL_CAP); out = out[:_DISCOVERY_TOTAL_CAP]; break
+    print("  arcgis discovery: %d significant permits from %d services" % (len(out), len(picked)))
+    return out
+
+# ---------------------------------------------------------------------------
+# Ireland -- National Planning Application Database (Dept of Housing), public
+# ArcGIS FeatureServer (no key). Merged planning registers of the 31 local
+# authorities. No valuation, so significance is SIZE-based: large residential
+# (>=30 units), large sites (>=2 ha) or big floor area (>=5000 m2); single rural
+# houses (OneOffKPI=Yes) and withdrawn/invalid apps excluded. Coords from geometry
+# (outSR=4326). Source confirmed via data.gov.ie / GeoHive.
+# ---------------------------------------------------------------------------
+def fetch_ireland_planning():
+    import urllib.parse
+    base = ("https://services.arcgis.com/NzlPQPKn5QF9v2US/arcgis/rest/services/"
+            "IrishPlanningApplications/FeatureServer/0/query?")
+    fields = ("PlanningAuthority,ApplicationNumber,DevelopmentDescription,ApplicationStatus,"
+              "ApplicationType,NumResidentialUnits,AreaofSite,FloorArea,ReceivedDate,OneOffKPI,LinkAppDetails")
+    def q(where):
+        p = {"where": where, "outFields": fields, "outSR": "4326", "f": "geojson",
+             "resultRecordCount": 2000, "orderByFields": "ReceivedDate DESC", "returnGeometry": "true"}
+        return _get_json(base + urllib.parse.urlencode(p))
+    feats = []
+    for where in ("NumResidentialUnits >= 30 OR AreaofSite >= 2 OR FloorArea >= 5000", "1=1"):
+        try:
+            data = q(where)
+        except Exception as e:
+            print("  ireland planning query failed: %s" % e); data = None
+        feats = (data or {}).get("features", []) if isinstance(data, dict) else []
+        if feats: break
+    out = []
+    for f in feats:
+        try:
+            pr = f.get("properties") or {}
+            if str(pr.get("OneOffKPI") or "").strip().lower() == "yes":
+                continue                                          # single rural house
+            units = _num(pr.get("NumResidentialUnits")); area = _num(pr.get("AreaofSite")); floor = _num(pr.get("FloorArea"))
+            big = (units is not None and units >= 30) or (area is not None and area >= 2) or (floor is not None and floor >= 5000)
+            if not big:
+                continue
+            status = str(pr.get("ApplicationStatus") or "")
+            if any(k in status.lower() for k in ("withdrawn", "invalid", "incomplete")):
+                continue
+            geom = f.get("geometry")
+            if geom and geom.get("type") == "Point":
+                co = geom.get("coordinates") or []
+                la, lo = (co[1], co[0]) if len(co) >= 2 else (None, None)
+            else:
+                c = _geom_center(geom); la, lo = c if c else (None, None)
+            if la is None or lo is None:
+                continue
+            sz = ("%d homes" % int(units)) if (units and units >= 30) else \
+                 (("%.1f ha" % area) if (area and area >= 2) else (("%d m2" % int(floor)) if floor else ""))
+            nm = (str(pr.get("DevelopmentDescription") or "").strip()[:130] or "Irish planning application")
+            p = {"name": nm, "type": str(pr.get("ApplicationType") or "Planning application")[:60],
+                 "state": "Ireland", "lat": round(la, 5), "lng": round(lo, 5), "precise": True,
+                 "value_usd": None, "size": sz, "status": status,
+                 "company": str(pr.get("PlanningAuthority") or "")[:80],
+                 "url": str(pr.get("LinkAppDetails") or "https://planning.geohive.ie/"),
+                 "date": _iso_date(pr.get("ReceivedDate")),
+                 "desc": ("Irish planning application (%s). National Planning Application Database; "
+                          "check the local authority file and An Coimisi\u00fan Plean\u00e1la for appeals and "
+                          "comment windows." % (sz or "large development")),
+                 "source": "ireland_planning"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  ireland planning: %d significant developments" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Portugal -- national Environmental Impact Assessment processes (APA / SNIAmb),
+# public ArcGIS MapServer (no key). Layer 0 "Estudos" = AIA processes, point +
+# study-area geometry in EPSG:3763, so we query outSR=4326. No valuation, so (like
+# IBAMA/ANLA/IAAC) every national EIA process is kept -- these are major projects
+# by definition. Field names are Portuguese and not documented, so they are sniffed
+# at runtime over the actually-returned properties (no guessing of data). Service
+# verified via the SNIAmb ArcGIS REST directory. FLAG: review first Actions-run log.
+# ---------------------------------------------------------------------------
+def fetch_portugal_eia():
+    import urllib.parse
+    url = ("https://sniambgeoogc.apambiente.pt/getogc/rest/services/SNIAmb/"
+           "Avaliacao_de_Impacte_Ambiental/MapServer/0/query?" + urllib.parse.urlencode({
+               "where": "1=1", "outFields": "*", "outSR": "4326", "f": "geojson",
+               "resultRecordCount": 4000, "returnGeometry": "true"}))
+    try:
+        data = _get_json(url)
+    except Exception as e:
+        print("  portugal eia query failed: %s" % e); return []
+    feats = (data or {}).get("features", []) if isinstance(data, dict) else []
+    def pick(props, subs):
+        for k in props.keys():
+            u = k.upper()
+            if any(s in u for s in subs):
+                return k
+        return None
+    out = []
+    for f in feats:
+        try:
+            pr = f.get("properties") or {}
+            if not pr:
+                continue
+            geom = f.get("geometry") or {}
+            c = _geom_center(geom)
+            if not c:
+                continue
+            la, lo = c
+            k_name = pick(pr, ["DESIG", "NOME", "PROJET", "TITUL", "ASSUNTO", "DESCR"])
+            k_stat = pick(pr, ["ESTADO", "FASE", "SITUAC", "DECIS"])
+            k_type = pick(pr, ["TIPOLOG", "NATUREZA", "CATEG", "SETOR", "SECTOR", "TIPO"])
+            k_proc = pick(pr, ["NUP", "PROC", "NUMERO", "NUM_"])
+            k_prom = pick(pr, ["PROMOTOR", "PROPON", "REQUER", "ENTIDAD"])
+            k_link = pick(pr, ["URL", "LINK", "LIGA"])
+            k_date = pick(pr, ["DATA", "DATE"])
+            nm = (str(pr.get(k_name)).strip() if k_name and pr.get(k_name) else "") \
+                 or (("Processo AIA " + str(pr.get(k_proc))) if k_proc and pr.get(k_proc) else "Processo de Avalia\u00e7\u00e3o de Impacte Ambiental")
+            link = str(pr.get(k_link)).strip() if k_link and pr.get(k_link) else ""
+            if not link.lower().startswith("http"):
+                link = "https://siaia.apambiente.pt/"
+            p = {"name": nm[:140],
+                 "type": (str(pr.get(k_type)).strip()[:60] if k_type and pr.get(k_type) else "Avalia\u00e7\u00e3o de Impacte Ambiental"),
+                 "state": "Portugal", "lat": round(la, 5), "lng": round(lo, 5),
+                 "precise": (geom.get("type") == "Point"),
+                 "value_usd": None, "size": "",
+                 "status": (str(pr.get(k_stat)).strip()[:60] if k_stat and pr.get(k_stat) else ""),
+                 "company": (str(pr.get(k_prom)).strip()[:80] if k_prom and pr.get(k_prom) else ""),
+                 "url": link, "date": _iso_date(pr.get(k_date)) if k_date else None,
+                 "desc": ("Portuguese Environmental Impact Assessment process (national AIA register, "
+                          "Ag\u00eancia Portuguesa do Ambiente / SIAIA). Check the SIAIA file for the public "
+                          "consultation window."),
+                 "source": "portugal_eia"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  portugal eia: %d AIA processes" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Land Matrix -- global large-scale land acquisitions ("land grabs"), ~2,300
+# concluded transnational deals >=200 ha across ~97 countries (agriculture,
+# forestry, mining, renewable-energy land, industry, speculation, tourism).
+# Pulled LIVE + auto-updating weekly from the datasets/land-matrix GitHub mirror
+# (built from the Land Matrix API; CC-BY-NC). The mirror is country-level (no
+# per-deal coordinates), so each deal is placed at its country centroid
+# (precise:false) using the google/dspl country-centroid CSV (also GitHub-hosted).
+# Both sources are auto-pullable -- no manual downloads. Deal pages: landmatrix.org/deal/<n>/
+# ---------------------------------------------------------------------------
+_LM_DEALS_URL = "https://raw.githubusercontent.com/datasets/land-matrix/main/data/database.csv"
+_LM_CENT_URL  = "https://raw.githubusercontent.com/google/dspl/master/samples/google/canonical/countries.csv"
+# WB-style Land Matrix country name -> ISO2 (for the 13 names that differ from the
+# centroid CSV's labels; coordinates themselves always come from the dspl CSV).
+_LM_ALIAS = {
+    "Congo, Dem. Rep.": "CD", "Congo, Rep.": "CG", "Egypt, Arab Rep.": "EG",
+    "Gambia, The": "GM", "Kyrgyz Republic": "KG", "Lao PDR": "LA", "Myanmar": "MM",
+    "North Macedonia": "MK", "Russian Federation": "RU", "South Sudan": "SS",
+    "S\u00e3o Tom\u00e9 and Principe": "ST", "T\u00fcrkiye": "TR", "Venezuela, RB": "VE",
+}
+def _lm_read_csv(url, delim):
+    import urllib.request, csv, io
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        text = r.read().decode("utf-8", "replace")
+    return list(csv.DictReader(io.StringIO(text), delimiter=delim))
+def fetch_land_matrix():
+    try:
+        cent_rows = _lm_read_csv(_LM_CENT_URL, ",")
+    except Exception as e:
+        print("  land matrix: centroid fetch failed: %s" % e); return []
+    name2ll, iso2ll = {}, {}
+    for c in cent_rows:
+        try:
+            ll = (float(c["latitude"]), float(c["longitude"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if c.get("name"): name2ll[c["name"]] = ll
+        if c.get("country"): iso2ll[c["country"].upper()] = ll
+    try:
+        deals = _lm_read_csv(_LM_DEALS_URL, ";")
+    except Exception as e:
+        print("  land matrix: deals fetch failed: %s" % e); return []
+    out, unplaced = [], set()
+    for d in deals:
+        try:
+            country = (d.get("Target Country") or "").strip()
+            ll = name2ll.get(country) or iso2ll.get(_LM_ALIAS.get(country, "").upper())
+            if not ll:
+                unplaced.add(country); continue
+            ha = _num(d.get("Hectares"))
+            inv = (d.get("Investor 1") or "").strip()
+            sector = (d.get("Inv. Sector 1") or "").strip()
+            crop = (d.get("Crop 1") or "").strip()
+            invc = (d.get("Investor Country 1") or "").strip()
+            yr = (d.get("Year") or "").strip()
+            num = (d.get("Deal Number") or "").strip()
+            use = crop or sector or "land acquisition"
+            nm = ("%s \u2014 %s" % (inv, use)) if inv else ("Large-scale land deal \u2014 %s" % use)
+            size = ("%s ha" % ("{:,}".format(int(ha)) if ha else "")) if ha else ""
+            desc = ("Large-scale land acquisition tracked by the Land Matrix"
+                    + (" (deal #%s)" % num if num else "") + ". "
+                    + (("Investor: %s" % inv) + (" (%s)" % invc if invc else "") + ". " if inv else "")
+                    + (("Intended use: %s. " % use) if use != "land acquisition" else "")
+                    + "Concluded transnational deal \u2265200 ha; see the Land Matrix deal page for sources and status.")
+            p = {"name": nm[:140], "type": (sector or "Land acquisition")[:60],
+                 "state": country, "lat": round(ll[0], 4), "lng": round(ll[1], 4),
+                 "precise": False, "value_usd": None, "size": size,
+                 "status": "Concluded", "company": inv[:80],
+                 "url": ("https://landmatrix.org/deal/%s/" % num) if num else "https://landmatrix.org/",
+                 "date": (yr if (yr.isdigit() and len(yr) == 4) else None),
+                 "acres": (round(ha * 2.47105) if ha else None),
+                 "desc": desc, "source": "land_matrix"}
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  land matrix: %d land deals (%d countries)%s" % (
+        len(out), len(set(p["state"] for p in out)),
+        (" | unplaced: %s" % ", ".join(sorted(unplaced))) if unplaced else ""))
+    return out
+
+
+def fetch_dc_permits():
+    base = "https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/FeatureServer"
+    feats = _arcgis_query_all(base, layer=4, label="dc permits")
+    out = []
+    for f in feats:
+        try:
+            pr = f.get("properties") or {}
+            up = {str(k).upper(): v for k, v in pr.items()}
+            if str(up.get("PERMIT_TYPE_NAME") or "").upper() != "CONSTRUCTION":
+                continue                                   # skip supplemental (electrical/plumbing/etc.)
+            sub = str(up.get("PERMIT_SUBTYPE_NAME") or "").upper()
+            if not ("NEW CONSTRUCTION" in sub or "RAZE" in sub):
+                continue                                   # keep only new builds + demolitions
+            status = str(up.get("APPLICATION_STATUS_NAME") or "")
+            if any(k in status.lower() for k in ("completed", "cancel", "withdrawn",
+                                                 "expired", "revoked", "disapprov")):
+                continue
+            la = _num(up.get("LATITUDE")); lo = _num(up.get("LONGITUDE"))
+            if la is None or lo is None or (abs(la) < 0.01 and abs(lo) < 0.01):
+                continue                                   # ungeocoded 0,0 rows
+            nm = str(up.get("DESC_OF_WORK") or up.get("FULL_ADDRESS") or "D.C. construction permit")[:140]
+            kind = "Demolition" if "RAZE" in sub else "New construction"
+            p = {
+                "name": nm, "type": kind, "state": "District of Columbia",
+                "lat": round(la, 5), "lng": round(lo, 5), "precise": True,
+                "value_usd": None, "size": "", "status": status,
+                "company": str(up.get("OWNER_NAME") or up.get("PERMIT_APPLICANT") or "")[:80],
+                "url": "https://opendata.dc.gov/", "date": _iso_date(up.get("ISSUE_DATE")),
+                "desc": ("D.C. building permit \u2014 " + kind.lower() + ". Local construction "
+                         "filing; check the ANC agenda and Dept of Buildings docket for any "
+                         "review or comment window."),
+                "source": "dc_permits",
+            }
+            p["impact"] = rate_project(p, sensitivity=1)
+            out.append(p)
+        except Exception:
+            continue
+    print("  dc permits: %d new-construction / demolition permits (last 30 days)" % len(out))
+    return out
+
 
 def fetch_epbc_au():
     url = _arcgis_item_url("ee02ed7773d44c6fa799bf558c70f81a")
@@ -2530,15 +3568,28 @@ def main():
     items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
                                               if cfg.get("domain") not in _SOCRATA_OFF
                                               for p in fetch_socrata(cfg)])
+    items += _run("dc_permits", fetch_dc_permits)                     # Washington DC new-construction + demolition permits
+    items += _run("tempe_permits", fetch_tempe_permits)                 # Tempe AZ major construction ($5M+)
+    for _acfg in ARCGIS_PERMIT_CITIES:
+        items += _run(_acfg["source"], (lambda c: (lambda: fetch_arcgis_permits(c)))(_acfg))   # generic ArcGIS permit cities
+    items += _run("socrata_discovery", fetch_socrata_discovered)          # auto-discovered Socrata permit portals (capped, $5M-gated)
+    items += _run("arcgis_discovery", fetch_arcgis_discovered)            # auto-discovered ArcGIS permit services (capped, $5M-gated)
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
     items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
+    items += _run("ceqanet", fetch_ceqanet)                     # California CEQA/NEPA environmental filings (state clearinghouse)
+    items += _run("wa_sepa", fetch_wa_sepa)                     # Washington State SEPA environmental-review filings
     items += _run("sitadel_fr", fetch_sitadel_fr)               # France national permits (automated)
     items += _run("uk_planit", fetch_ukplanit)                  # UK national planning applications
     items += _run("epbc_au", fetch_epbc_au)                     # Australia national environmental referrals
     items += _run("iaac_ca", fetch_iaac_ca)                     # Canada federal impact assessments
-    items += _run("ibama_br", fetch_ibama_br)                   # Brazil federal environmental licences
+    items += _run("anla_co", fetch_anla_co)                     # Colombia ANLA environmental-licensing projects
+    items += _run("ibama_br", fetch_ibama_br)
+    items += _run("ireland_planning", fetch_ireland_planning)          # Ireland national planning DB (size-gated)
+    items += _run("portugal_eia", fetch_portugal_eia)              # Portugal national EIA processes (APA/SNIAmb)                   # Brazil federal environmental licences
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
+    items += _run("land_matrix", fetch_land_matrix)               # GLOBAL: large-scale land acquisitions (Land Matrix, country-level)
+    items += _run("gem", fetch_gem)                               # GLOBAL: proposed fossil infra -- coal plants+mines, gas, oil (Global Energy Monitor, live)
     items += _carry_sources(lambda s: s == "osm_construction", "osm_construction")
     _finish(items)
 
