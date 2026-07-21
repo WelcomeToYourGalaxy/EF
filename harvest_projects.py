@@ -23,10 +23,44 @@ Each source fetcher returns a list of normalized dicts:
 rate_project() then assigns impact 1-5. Records without lat/lng are skipped
 (the map needs a point). Output is written to projects.json.
 """
-import json, sys, os, re, time, datetime, urllib.request, urllib.parse
+import json, sys, os, re, time, datetime, urllib.request, urllib.parse, gzip
 
 UA = "activist-projects-harvester (contact: wheelock.chris@gmail.com)"
 TIMEOUT = 30
+
+# ----------------------------------------------------------------------------
+# OUTPUT FILE  --  the harvest is committed as gzip (projects.json.gz) because
+# the uncompressed JSON exceeds GitHub's 100 MB per-file push limit. No data is
+# dropped: the map inflates the .gz client-side. A plain projects.json is read
+# as a fallback so an older uncompressed file still carries forward on the first
+# run after this change.
+# ----------------------------------------------------------------------------
+PROJECTS_GZ = "projects.json.gz"
+PROJECTS_PLAIN = "projects.json"
+
+def _projects_exists():
+    return os.path.exists(PROJECTS_GZ) or os.path.exists(PROJECTS_PLAIN)
+
+def _load_projects():
+    """Read the previous harvest (gz preferred, plain fallback). Returns the
+    parsed object (dict or list); raises like json.load if neither is present or
+    is unreadable, so existing try/except callers behave exactly as before."""
+    if os.path.exists(PROJECTS_GZ):
+        with gzip.open(PROJECTS_GZ, "rt", encoding="utf-8") as f:
+            return json.load(f)
+    with open(PROJECTS_PLAIN, encoding="utf-8") as f:
+        return json.load(f)
+
+def _dump_projects(out):
+    """Write the harvest as gzip only. Remove any stale uncompressed file so the
+    100 MB-over-limit projects.json can never be what gets committed/pushed."""
+    with gzip.open(PROJECTS_GZ, "wt", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+    if os.path.exists(PROJECTS_PLAIN):
+        try:
+            os.remove(PROJECTS_PLAIN)
+        except OSError:
+            pass
 
 # ----------------------------------------------------------------------------
 # IMPACT RATING  (1 minor .. 5 landscape/nationally significant)
@@ -3549,7 +3583,7 @@ def _osm_tiles(step=5.0):
 def _osm_existing():
     """Keep what earlier runs already harvested so coverage accumulates."""
     try:
-        ex = json.load(open("projects.json", encoding="utf-8"))
+        ex = _load_projects()
         rows = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
         return [q for q in rows if q.get("source") == "osm_construction"]
     except Exception:
@@ -7305,9 +7339,9 @@ def _finish(items):
     # per-source preservation: if a source comes back much thinner than what is
     # already saved (e.g. PermitStack hit its daily rate limit), keep the prior
     # entries for that source instead of clobbering them.
-    if os.path.exists("projects.json"):
+    if _projects_exists():
         try:
-            ex = json.load(open("projects.json", encoding="utf-8"))
+            ex = _load_projects()
             exl = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
             from collections import defaultdict
             old_by, new_by = defaultdict(list), defaultdict(list)
@@ -7326,9 +7360,9 @@ def _finish(items):
             print("  [preserve] skipped: %s" % e)
 
     # anti-wipe: never replace a healthy projects.json with a thin/empty harvest
-    if len(items) < 4 and os.path.exists("projects.json"):
+    if len(items) < 4 and _projects_exists():
         try:
-            ex = json.load(open("projects.json", encoding="utf-8"))
+            ex = _load_projects()
             exn = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
             if len(exn) > len(items):
                 print("harvest thin (%d) < existing (%d) -- keeping existing projects.json" % (len(items), len(exn)))
@@ -7341,9 +7375,8 @@ def _finish(items):
                      "sources": "socrata permits, land matrix, global energy monitor, epa eis, ferc, ejatlas",
                      "rating_scale": "1 minor / 2 local / 3 regional / 4 major / 5 landscape"},
            "projects": items}
-    with open("projects.json", "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
-    print("wrote projects.json with %d projects" % len(items))
+    _dump_projects(out)
+    print("wrote projects.json.gz with %d projects" % len(items))
     if not items:
         print("NOTE: no sources wired yet -- fill SOCRATA_CITIES and uncomment a "
               "fetcher. The map falls back to its embedded seed set until then.")
@@ -7480,7 +7513,7 @@ def _fed_budget(name, daily_default, fed_default):
 def _carry_sources(pred, label):
     """Reuse entries already in projects.json for sources this run isn't refreshing."""
     try:
-        ex = json.load(open("projects.json", encoding="utf-8"))
+        ex = _load_projects()
         rows = ex.get("projects", []) if isinstance(ex, dict) else (ex if isinstance(ex, list) else [])
     except Exception:
         rows = []
