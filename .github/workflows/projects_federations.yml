@@ -12,7 +12,7 @@ permissions:
 jobs:
   shard:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 345
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +29,7 @@ jobs:
           PERMITSTACK_API_KEY: ${{ secrets.PERMITSTACK_API_KEY }}
           FED_SHARD: ${{ matrix.shard }}
           FED_SHARDS: '4'
+          FED_SHARD_MAX_MIN: '315'
         run: python harvest_projects.py
       - uses: actions/upload-artifact@v4
         with:
@@ -49,6 +50,7 @@ jobs:
       - name: Install deps
         run: pip install permitstack requests
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: fed-part-*
           merge-multiple: true
