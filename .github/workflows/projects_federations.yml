@@ -1,0 +1,64 @@
+name: Harvest portal federations (sharded)
+# 4 parallel shards, each taking every 4th portal of every federation list
+# (CKAN 548, ODS 308, GeoNode 274, DKAN 104, WFS 987, OGC API 18, uData on
+# shard 0). Together the shards cover 100% of the portals in one scheduled
+# run (~20h of wall-clock in ~5.5h real time), then a merge job folds the
+# parts into projects.json -- the same pattern as the weekly OSM job.
+on:
+  schedule:
+    - cron: "30 2 * * 1,4"   # Mon + Thu 02:30 UTC (offset from daily + OSM jobs)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run federation shard
+        env:
+          FED_SHARD: ${{ matrix.shard }}
+          FED_SHARDS: "4"
+        run: python harvest_projects.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fed-part-${{ matrix.shard }}
+          path: fed_part_${{ matrix.shard }}.json
+          if-no-files-found: warn
+
+  merge:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fed-part-*
+          merge-multiple: true
+      - name: Merge shard parts into projects.json
+        env:
+          FED_MERGE: "1"
+        run: python harvest_projects.py
+      - name: Commit updated projects.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin HEAD || true
+          git add projects.json
+          git diff --cached --quiet || git commit -m "federations refresh (sharded)"
+          git push
