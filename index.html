@@ -23170,6 +23170,18 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
      desc:"Large building permits ($5M+) from additional US city ArcGIS feature services found automatically via the ArcGIS Online search API \u2014 wider coverage beyond the hand-picked and Socrata cities."},
     {k:"ckan",cat:"\ud83c\udfd7\ufe0f Building permits",label:"National open-data portals",
      desc:"Permits and development records published by national open-data portals \u2014 Chile, Spain, Italy, Ireland, Poland, Netherlands, Norway, Germany, Switzerland, New Zealand and more."},
+     {k:"ods",cat:"\ud83c\udfd7\ufe0f Building permits",label:"OpenDataSoft portals worldwide",
+      desc:"Planning, permit and development records from OpenDataSoft-powered open-data portals \u2014 hundreds of French communes and departments, Australian and Belgian councils, Swiss cantons and more, searched in French, English, Spanish and Portuguese. Terminal (refused/withdrawn/expired) records are filtered out."},
+     {k:"geonode",cat:"\ud83c\udfd7\ufe0f Building permits",label:"GeoNode spatial portals worldwide",
+      desc:"Development, mining, concession and land-use layers from GeoNode geospatial portals \u2014 national and municipal geoportals across Indonesia, Argentina, Mexico, Italy, Brazil, Bolivia and more \u2014 read feature-by-feature over WFS. Broader than the permit feeds (some layers are full inventories); terminal records are filtered out."},
+     {k:"dkan",cat:"\ud83c\udfd7\ufe0f Building permits",label:"DKAN open-data portals",
+      desc:"Permit and development records from DKAN-powered open-data portals \u2014 chiefly Germany, plus Spain, Greece, Italy, Mexico, Indonesia and others \u2014 covering both the older CKAN-compatible and newer DKAN datastore APIs. Terminal (refused/withdrawn/expired) records are filtered out."},
+     {k:"udata",cat:"\ud83c\udfd7\ufe0f Building permits",label:"uData portals (France, Portugal)",
+      desc:"Planning and development datasets from uData-powered national portals \u2014 data.gouv.fr (France) and dados.gov.pt (Portugal) \u2014 searched broadly across French, Portuguese and English permit and environmental-assessment terms. Terminal records are filtered out."},
+     {k:"wfs",cat:"\ud83c\udfd7\ufe0f Building permits",label:"Government GeoServer / WFS worldwide",
+      desc:"Vector map layers about development, mining, concessions, land-use and infrastructure read directly from government GeoServer / WFS spatial services \u2014 nearly a thousand endpoints across Indonesia, Argentina, the UK, the Netherlands, Italy, Germany and more, feature by feature. Broadest and coarsest of the feeds (some layers are inventories or basemaps); terminal records are filtered out."},
+     {k:"ogcapi",cat:"\ud83c\udfd7\ufe0f Building permits",label:"Government OGC API \u2014 Features",
+      desc:"Development, land-use and infrastructure collections from modern government OGC API \u2014 Features (pygeoapi) services \u2014 for example Spain\u2019s IGN, Portugal\u2019s DG Territ\u00f3rio and the City of Athens \u2014 read as GeoJSON. A small, modern slice; terminal records are filtered out."},
     {k:"arcgis_hub",cat:"\ud83c\udfd7\ufe0f Building permits",label:"Cities & regions worldwide",
      desc:"Permits pulled straight from individual city and regional open-data sites around the world, searched in 12 languages \u2014 this is how countries with no national register (Germany, Spain, Italy, Japan\u2026) get covered, one authority at a time."},
     {k:"federal_register",cat:"\ud83c\uddfa\ud83c\uddf8 US government reviews",label:"Federal environmental reviews",
@@ -23211,6 +23223,16 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
      desc:"Chile\u2019s largest projects under national environmental assessment \u2014 mines, dams, power and ports filing a full Environmental Impact Study (EIA) \u2014 from the Environmental Assessment Service (SEA). Shows projects under evaluation and recently approved; rejected and withdrawn ones are excluded."},
     {k:"peru_senace",cat:"\ud83c\udf10 Other countries",label:"Peru \u2014 environmental certification (SENACE)",
      desc:"Peru\u2019s largest investment projects under national environmental certification \u2014 mining, hydrocarbons, energy and transport \u2014 from SENACE\u2019s public GeoSENACE service. Projects under evaluation; disapproved, withdrawn and archived ones are excluded."},
+    {k:"nsw_major",cat:"\ud83c\udf10 Other countries",label:"Australia (NSW) \u2014 major projects",
+     desc:"State Significant Development and Infrastructure across New South Wales \u2014 mines, quarries, energy, data centres, warehouses and large subdivisions assessed by the state rather than local councils. Shows projects under assessment; decided cases are excluded."},
+    {k:"qld_coordinated",cat:"\ud83c\udf10 Other countries",label:"Australia (QLD) \u2014 coordinated projects",
+     desc:"Major infrastructure across Queensland \u2014 mines, dams, ports, pipelines and industrial precincts \u2014 declared for a state-run impact assessment by the Coordinator-General. Completed and lapsed projects are excluded."},
+    {k:"bc_eao",cat:"\ud83c\udf10 Other countries",label:"Canada (BC) \u2014 environmental assessments",
+     desc:"Major projects across British Columbia \u2014 mines, LNG, pipelines, dams and resorts \u2014 under the province\u2019s Environmental Assessment Office (EPIC). Shows projects under assessment; certified, withdrawn and terminated ones are excluded."},
+    {k:"sask_eia",cat:"\ud83c\udf10 Other countries",label:"Canada (Saskatchewan) \u2014 environmental assessments",
+     desc:"Active applications and projects under Saskatchewan\u2019s environmental assessment process \u2014 mines, dams, power and infrastructure \u2014 from the Ministry of Environment\u2019s Environmental Assessment Branch. Historical (decided) projects are excluded."},
+    {k:"ireland_eia",cat:"\ud83c\udf10 Other countries",label:"Ireland \u2014 environmental impact assessments",
+     desc:"Irish developments that triggered a full Environmental Impact Assessment (EU Directive 2014/52/EU) \u2014 roads, quarries, energy, waste and large housing \u2014 from the national EIA open-data layer. Decided (granted/refused) cases are excluded."},
     {k:"ejatlas",cat:"\ud83c\udf0d Global",label:"Environmental-justice conflicts",
      desc:"Community fights against harmful projects worldwide, documented by the Environmental Justice Atlas."}
   ];
@@ -23224,11 +23246,18 @@ try{ document.querySelectorAll('#helpPanel .help-body, #wirePanel .wire-body, #i
     if(s.indexOf("socrata_discovered:")===0) return "socrata_discovered";
     if(s.indexOf("socrata")===0) return "socrata";
     if(s.indexOf("ckan_")===0) return "ckan";
+    if(s.indexOf("ods_")===0) return "ods";
+    if(s.indexOf("geonode_")===0) return "geonode";
+    if(s.indexOf("dkan_")===0) return "dkan";
+    if(s.indexOf("udata_")===0) return "udata";
+    if(s.indexOf("wfs_")===0) return "wfs";
+    if(s.indexOf("ogcapi_")===0) return "ogcapi";
     if(s.indexOf("arcgis_city:")===0) return "arcgis_city";
     if(s.indexOf("arcgis_discovered:")===0) return "arcgis_discovered";
     if(s.indexOf("gem_fossil:")===0) return "gem_fossil";
     if(s.indexOf("gem_renewable:")===0) return "gem_renewable";
     if(s.indexOf("gem_industry:")===0) return "gem_industry";
+    if(s==="blm_arcgis") return "public_land_nepa";
     return s; }
   var activeProjSrc=new Set(PJ_SRC.map(function(s){return s.k;}));
   function pjBuildSrcUI(){

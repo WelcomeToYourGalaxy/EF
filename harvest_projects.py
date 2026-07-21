@@ -121,9 +121,25 @@ def rate_project(p, sensitivity=0):
 # HELPERS
 # ----------------------------------------------------------------------------
 def _get_json(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        return json.loads(r.read().decode("utf-8", "replace"))
+    """GET JSON with ONE retry on transient failures (timeouts, 5xx, 429). A single
+    hiccup used to permanently lose that portal/dataset for the whole run; 4xx
+    (other than 429) is a real answer and is not retried."""
+    last = None
+    for attempt in (0, 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code == 429 or e.code >= 500:
+                if attempt == 0: time.sleep(2.0); continue
+            raise
+        except Exception as e:                      # URLError / timeout / reset
+            last = e
+            if attempt == 0: time.sleep(2.0); continue
+            raise
+    raise last
 
 def _num(x):
     try: return float(x)
@@ -258,7 +274,7 @@ def _socrata_point(r, cfg):
         return _num(r.get(cfg["lat"])), _num(r.get(cfg["lng"]))
     return None, None
 
-def fetch_socrata(cfg, limit=500):
+def fetch_socrata(cfg, limit=5000):
     out = []
     base = "https://{d}/resource/{ds}.json".format(d=cfg["domain"], ds=cfg["dataset"])
     if cfg.get("heuristic"):                         # self-detect columns from a live sample
@@ -329,7 +345,7 @@ def fetch_socrata(cfg, limit=500):
 # $5M value floor (enforced inside fetch_socrata). Isolated source group so it can
 # be reviewed / toggled independently of the hand-curated cities. CAPPED to bound
 # runtime. Runs on Actions (which can reach api.us.socrata.com); sandbox cannot.
-_DISCOVERY_CAP = 40
+_DISCOVERY_CAP = 200
 _DISCOVERY_PORTAL_CAP = 400      # max significant permits kept per discovered portal (flood guard)
 _DISCOVERY_TOTAL_CAP = 5000      # max significant permits kept per discovery engine
 def fetch_socrata_discovered(max_datasets=_DISCOVERY_CAP):
@@ -414,8 +430,10 @@ _GEM_TRACKERS = [
     ("wind",           "renewable", "wind",       "wind farm",            "https://globalenergymonitor.org/projects/global-wind-power-tracker/"),
     ("solar",          "renewable", "solar",      "solar farm",           "https://globalenergymonitor.org/projects/global-solar-power-tracker/"),
     ("hydro",          "renewable", "hydropower", "hydropower project",   "https://globalenergymonitor.org/projects/global-hydropower-tracker/"),
+    ("bioenergy",      "renewable", "bioenergy",  "bioenergy power plant","https://globalenergymonitor.org/projects/global-bioenergy-power-tracker/"),
     ("giomt",          "industry",  "ironore",    "iron ore mine",        "https://globalenergymonitor.org/projects/global-iron-ore-mine-tracker/"),
     ("gist",           "industry",  "steel",      "iron & steel plant",   "https://globalenergymonitor.org/projects/global-iron-and-steel-tracker/"),
+    ("gcct",           "industry",  "cement",     "cement plant",         "https://globalenergymonitor.org/projects/global-cement-and-concrete-tracker/"),
 ]
 
 def _gem_read_config(slug):
@@ -666,7 +684,7 @@ def _is_project(text):
         return False
     return any(a in t for a in _PROJECT_ALLOW)
 
-def fetch_federal_register(days=120, per_page=100):
+def fetch_federal_register(days=180, per_page=100):
     """EIS / NEPA notices from the Federal Register API (free, no key).
     No coordinates in the data, so each is geocoded to its STATE centroid
     (approximate) and only when a single state is unambiguously named."""
@@ -777,15 +795,49 @@ def dedup(items):
         seen.add(key); out.append(p)
     return out
 
+_SRC_COUNTS = {}      # name -> rows returned this run (populated by _run)
+_RUN_FLAGS = []       # collected truncation / field-detection / failure notes
+
+def _flag(msg):
+    """Record a first-run review note; also echoed inline so it's greppable."""
+    _RUN_FLAGS.append(msg)
+    print("  [flag] " + msg)
+
 def _run(name, fn):
     """Run one source in isolation so a single failure can't kill the harvest."""
     try:
         got = fn() or []
+        _SRC_COUNTS[name] = _SRC_COUNTS.get(name, 0) + len(got)
         print("  %-18s %d" % (name + ":", len(got)))
         return got
     except Exception as e:
+        _SRC_COUNTS.setdefault(name, 0)
+        _RUN_FLAGS.append("%s FAILED: %s" % (name, e))
         print("  %-18s FAILED: %s" % (name + ":", e))
         return []
+
+
+def _print_diagnostics():
+    """Consolidated, greppable per-source summary -- the first-run diagnostic log.
+    Zero-yield sources and truncation/field flags are what to review after run 1."""
+    if not _SRC_COUNTS:
+        return
+    print("\n=== FIRST-RUN DIAGNOSTIC (per-source yields, pre-dedup) ===")
+    for nm, n in sorted(_SRC_COUNTS.items(), key=lambda kv: -kv[1]):
+        print("  %-24s %7d" % (nm, n))
+    total = sum(_SRC_COUNTS.values())
+    active = sum(1 for v in _SRC_COUNTS.values() if v > 0)
+    print("  " + "-" * 34)
+    print("  %-24s %7d" % ("TOTAL (pre-dedup)", total))
+    print("  sources reporting:       %d / %d" % (active, len(_SRC_COUNTS)))
+    zero = sorted(k for k, v in _SRC_COUNTS.items() if v == 0)
+    if zero:
+        print("  ZERO-YIELD (review):     " + ", ".join(zero))
+    if _RUN_FLAGS:
+        print("  FLAGS (%d):" % len(_RUN_FLAGS))
+        for m in _RUN_FLAGS:
+            print("    - " + m)
+    print("=== END DIAGNOSTIC ===\n")
 
 
 # ---------------------------------------------------------------------------
@@ -949,7 +1001,7 @@ def _iati_sector_code(a):
 
 _GEO_CACHE = {}
 _GEO_CALLS = [0]
-_GEO_MAX = 90   # Nominatim politeness budget per run (1 req/sec)
+_GEO_MAX = 200  # Nominatim politeness budget per run (1 req/sec)
 _PLACE_RE = re.compile(
     r"([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){0,3}\s+"
     r"(?:County|Parish|Borough|City|Township|District|Province|Governorate|Prefecture|"
@@ -993,7 +1045,7 @@ def _geocode_place(q, cc="us"):
     _GEO_CACHE[key] = res
     return res
 
-def fetch_public_land_nepa(days=180, per_page=100):
+def fetch_public_land_nepa(days=270, per_page=100):
     out = []
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     for mode, val, label in [("term", "bureau of land management", "BLM"),
@@ -1132,21 +1184,31 @@ def _wb_country_centroids():
         print("  world bank centroids failed: %s" % e)
     return cents
 
-def fetch_world_bank(rows=1000):
+def fetch_world_bank(rows=1000, max_pages=10):
     cents = _wb_country_centroids()
     if not cents:
         print("  world bank: no country centroids (skip)"); return []
     fl = ("id,project_name,countryname,countryshortname,countrycode,totalamt,"
           "totalcommamt,boardapprovaldate,sector1,status,regionname")
-    url = ("https://search.worldbank.org/api/v2/projects?format=json"
-           "&status_exact=Active&rows=%d&fl=%s" % (rows, urllib.parse.quote(fl)))
-    try:
-        data = _get_json(url)
-    except Exception as e:
-        print("  world bank failed: %s" % e); return []
-    projs = data.get("projects", data) if isinstance(data, dict) else data
-    if isinstance(projs, dict): projs = list(projs.values())
-    print("  world bank: %d active projects returned" % (len(projs) if projs else 0))
+    all_projs = []
+    for pg in range(max_pages):
+        url = ("https://search.worldbank.org/api/v2/projects?format=json"
+               "&status_exact=Active&rows=%d&os=%d&fl=%s" % (rows, pg * rows, urllib.parse.quote(fl)))
+        try:
+            data = _get_json(url)
+        except Exception as e:
+            print("  world bank page %d failed: %s" % (pg, e)); break
+        projs = data.get("projects", data) if isinstance(data, dict) else data
+        if isinstance(projs, dict): projs = list(projs.values())
+        n = len(projs) if projs else 0
+        if not projs: break
+        all_projs.extend(projs)
+        if n < rows: break
+        time.sleep(0.3)
+    else:
+        _flag("world_bank hit page cap (%d x %d) -- may be truncated" % (max_pages, rows))
+    projs = all_projs
+    print("  world bank: %d active projects returned" % len(projs))
     out = []; jitter = 0.0
     for pr in (projs or []):
         try:
@@ -1374,47 +1436,56 @@ _IATI_COUNTRIES = [
     "AL","BA","IQ","JO","LB","MD","ME","MK","PS","RS","SY","TR","UA","XK","YE","IR",
 ]
 
-def fetch_iati(per=1000):
+def fetch_iati(per=1000, max_pages=40):
     base = "https://datastore.codeforiati.org/api/1/access/activity.json"
-    out = []; scanned = 0; withloc = 0
+    out = []; scanned = 0; withloc = 0; shape_shown = False
     for cc in _IATI_COUNTRIES:
-        params = {"recipient-country": cc, "activity-status": "2",
-                  "limit": per, "offset": 0, "unwrap": "True"}
-        try:
-            data = _get_json(base + "?" + urllib.parse.urlencode(params))
-        except Exception as e:
-            print("  iati %s failed: %s" % (cc, e)); continue
-        if scanned == 0 and cc == _IATI_COUNTRIES[0]:
-            if isinstance(data, dict):
-                print("  iati [shape] dict keys: %s" % list(data.keys())[:8])
-            else:
-                print("  iati [shape] type: %s len: %s" % (type(data).__name__, len(data) if hasattr(data,"__len__") else "?"))
-        acts = _iati_activities(data)
-        if not acts:
-            time.sleep(0.3); continue
-        for a in acts:
-            scanned += 1
-            ll = _iati_pos(a)
-            if not ll: continue
-            nm = _iati_find(a, "narrative") or _iati_find(a, "title") or "Development activity"
-            _db = _dac_is_build(_iati_sector_code(a))    # True / False / None(unknown)
-            if _db is False:
-                continue                                  # sector says programme
-            if not _is_hard_build(str(nm)):
-                continue                                  # title must name hard infrastructure
-            withloc += 1
-            cn = _iati_find(a, "recipient-country") or _iati_find(a, "code") or ""
-            org = _iati_find(a, "reporting-org") or _iati_find(a, "narrative") or ""
-            p = {"name": str(nm)[:140], "type": "Development / aid project",
-                 "state": str(cn), "lat": round(ll[0], 5), "lng": round(ll[1], 5),
-                 "precise": True, "size": "", "status": "Active",
-                 "company": str(org)[:80],
-                 "url": "https://d-portal.org/q.html?aid=" + str(_iati_find(a, "iati-identifier") or ""),
-                 "desc": "Development/aid project (IATI). Reported location.",
-                 "source": "iati"}
-            p["impact"] = rate_project(p, sensitivity=1)
-            out.append(p)
-        time.sleep(0.4)
+        offset = 0; pages = 0; capped = True
+        while pages < max_pages:
+            params = {"recipient-country": cc, "activity-status": "2",
+                      "limit": per, "offset": offset, "unwrap": "True"}
+            try:
+                data = _get_json(base + "?" + urllib.parse.urlencode(params))
+            except Exception as e:
+                print("  iati %s failed: %s" % (cc, e))
+                capped = False; break
+            if not shape_shown:
+                shape_shown = True
+                if isinstance(data, dict):
+                    print("  iati [shape] dict keys: %s" % list(data.keys())[:8])
+                else:
+                    print("  iati [shape] type: %s len: %s" % (type(data).__name__, len(data) if hasattr(data, "__len__") else "?"))
+            acts = _iati_activities(data)
+            if not acts:
+                capped = False; break
+            for a in acts:
+                scanned += 1
+                ll = _iati_pos(a)
+                if not ll: continue
+                nm = _iati_find(a, "narrative") or _iati_find(a, "title") or "Development activity"
+                _db = _dac_is_build(_iati_sector_code(a))    # True / False / None(unknown)
+                if _db is False:
+                    continue                                  # sector says programme
+                if not _is_hard_build(str(nm)):
+                    continue                                  # title must name hard infrastructure
+                withloc += 1
+                cn = _iati_find(a, "recipient-country") or _iati_find(a, "code") or ""
+                org = _iati_find(a, "reporting-org") or _iati_find(a, "narrative") or ""
+                p = {"name": str(nm)[:140], "type": "Development / aid project",
+                     "state": str(cn), "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                     "precise": True, "size": "", "status": "Active",
+                     "company": str(org)[:80],
+                     "url": "https://d-portal.org/q.html?aid=" + str(_iati_find(a, "iati-identifier") or ""),
+                     "desc": "Development/aid project (IATI). Reported location.",
+                     "source": "iati"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            pages += 1; offset += per
+            time.sleep(0.4)
+            if len(acts) < per:          # last page for this country
+                capped = False; break
+        if capped:                        # stopped because we hit max_pages, not the end
+            _flag("iati %s hit page cap (%d x %d) -- recipient may be truncated" % (cc, max_pages, per))
     print("  iati: scanned %d active activities across %d countries, %d had coordinates"
           % (scanned, len(_IATI_COUNTRIES), withloc))
     return out
@@ -1454,6 +1525,148 @@ _HUB_QUERIES = [
     ("yapi ruhsati", "ruhsat"), ("autorizatie de construire", "autoriza"),
     ("epitesi engedely", "epitesi"), ("izin mendirikan bangunan", "izin"),
     ("permiso de construccion", "permiso"), ("oikodomiki adeia", "adeia"),
+    # environmental-assessment / consent vocabulary -- broad reach; catches New Zealand
+    # council resource consents (abundant + CC-BY on ArcGIS Hub) and English-titled EIA
+    # datasets worldwide. All still pass the significance + geometry gates.
+    ("environmental impact assessment", "environmental"), ("environmental clearance", "clearance"),
+    ("resource consent", "consent"), ("development consent", "consent"),
+    # East Asian scripts for the under-covered Pacific-rim gap (native dataset names)
+    ("\u5efa\u7bc9\u78ba\u8a8d", "\u5efa\u7bc9"),          # Japanese -- building confirmation
+    ("\u958b\u767a\u8a31\u53ef", "\u958b\u767a"),          # Japanese -- development permit
+    ("\uac74\ucd95\ud5c8\uac00", "\uac74\ucd95"),          # Korean -- building permit
+    ("\uac1c\ubc1c\ud589\uc704\ud5c8\uac00", "\uac1c\ubc1c"),  # Korean -- development-act permit
+    # Spanish + Portuguese environmental-assessment / licensing (Latin America has
+    # dense gov ArcGIS Hub coverage: Colombia, Mexico, Peru, Chile, Brazil councils).
+    ("evaluacion de impacto ambiental", "impacto ambiental"),
+    ("estudio de impacto ambiental", "impacto ambiental"),
+    ("licencia ambiental", "ambiental"), ("licenciamento ambiental", "ambiental"),
+    ("avaliacao de impacto ambiental", "impacto ambiental"),
+    # French environmental-assessment (France, Francophone Africa, Quebec)
+    ("etude d'impact environnemental", "impact"), ("autorisation environnementale", "environnement"),
+    ("evaluation environnementale", "environnement"),
+    # more Spanish/Portuguese assessment variants (Chile/Peru "DIA"; Brazilian EIA)
+    ("declaracion de impacto ambiental", "impacto ambiental"),
+    ("estudo de impacto ambiental", "impacto ambiental"),
+    # Arabic (MENA) + Russian (CIS) construction-permit terms -- native dataset names
+    ("\u0631\u062e\u0635\u0629 \u0628\u0646\u0627\u0621", "\u0631\u062e\u0635\u0629"),   # Arabic -- building licence
+    ("\u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u043d\u0430 \u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c\u0441\u0442\u0432\u043e", "\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c\u0441\u0442\u0432"),  # Russian -- construction permit
+    # Western/Central-European languages with dense gov ArcGIS Hub coverage
+    ("baugenehmigung", "baugenehmigung"), ("bebauungsplan", "bebauungsplan"),   # German
+    ("permesso di costruire", "costruire"),                                     # Italian -- building permit
+    ("valutazione di impatto ambientale", "impatto ambientale"),                # Italian -- EIA (VIA)
+    ("omgevingsvergunning", "omgevingsvergunning"),                             # Dutch -- environmental/building permit
+    ("pozwolenie na budowe", "pozwolenie"),                                     # Polish -- building permit
+    # Simplified Chinese (construction permit + construction-project EIA)
+    ("\u5efa\u7b51\u65bd\u5de5\u8bb8\u53ef", "\u65bd\u5de5\u8bb8\u53ef"),                    # building construction permit
+    ("\u5efa\u8bbe\u9879\u76ee\u73af\u5883\u5f71\u54cd\u8bc4\u4ef7", "\u73af\u5883\u5f71\u54cd"),  # construction-project EIA
+    # Nordic building permits (Sweden/Norway/Denmark/Finland -- strong open data)
+    ("bygglov", "bygglov"), ("byggetillatelse", "byggetillatelse"),
+    ("byggetilladelse", "byggetilladelse"), ("rakennuslupa", "rakennuslupa"),
+    # Baltic / Balkan (Latin script) + Mexican EIA term (MIA)
+    ("statybos leidimas", "statybos"),                                   # Lithuanian -- building permit
+    ("gradjevinska dozvola", "dozvola"),                                 # Serbian/Croatian/Bosnian
+    ("manifestacion de impacto ambiental", "impacto ambiental"),         # Mexico -- MIA
+    # Ukrainian + Bulgarian (Cyrillic, distinct from Russian) + Hebrew (Israel)
+    ("\u0434\u043e\u0437\u0432\u0456\u043b \u043d\u0430 \u0431\u0443\u0434\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e", "\u0431\u0443\u0434\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e"),  # Ukrainian -- construction permit
+    ("\u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u0437\u0430 \u0441\u0442\u0440\u043e\u0435\u0436", "\u0441\u0442\u0440\u043e\u0435\u0436"),  # Bulgarian -- building permit
+    ("\u05d4\u05d9\u05ea\u05e8 \u05d1\u05e0\u05d9\u05d9\u05d4", "\u05d4\u05d9\u05ea\u05e8"),   # Hebrew -- building permit
+    # further coverage: SE Asia, Iberia/Catalonia, more of the Nordics/Baltics/Balkans
+    ("gi\u1ea5y ph\u00e9p x\u00e2y d\u1ef1ng", "x\u00e2y d\u1ef1ng"),        # Vietnamese -- construction permit
+    ("alvara de construcao", "alvar"),                                       # Portuguese -- building permit (alvara)
+    ("llicencia d'obres", "obres"),                                          # Catalan -- works licence
+    ("gradbeno dovoljenje", "dovoljenje"),                                   # Slovenian -- building permit
+    ("ehitusluba", "ehitusluba"),                                            # Estonian -- building permit
+    ("byggingarleyfi", "byggingarleyfi"),                                    # Icelandic -- building permit
+    ("relatorio de impacto ambiental", "impacto ambiental"),                 # Brazil -- RIMA
+    # English environmental-consent variants (South Africa "EA", EU permits)
+    ("environmental authorisation", "authorisation"), ("environmental permit", "environmental permit"),
+    # SE Asia building permits + native EIA-procedure names (catch assessment datasets
+    # that the building-permit terms miss) for Norway/Germany/Sweden/Turkey
+    ("\u0e43\u0e1a\u0e2d\u0e19\u0e38\u0e0d\u0e32\u0e15\u0e01\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07", "\u0e01\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07"),  # Thai -- construction permit
+    ("kebenaran merancang", "merancang"),                                    # Malay -- planning permission
+    ("konsekvensutredning", "konsekvensutredning"),                          # Norwegian -- EIA
+    ("umweltvertraglichkeitsprufung", "umweltvertr"),                        # German -- UVP (EIA)
+    ("miljokonsekvensbeskrivning", "konsekvens"),                            # Swedish -- MKB (EIA)
+    ("cevresel etki degerlendirmesi", "etki"),                               # Turkish -- CED (EIA)
+    # SE Asia EIA regimes + extraction projects (global)
+    ("amdal", "amdal"),                                                      # Indonesia -- AMDAL (EIA)
+    ("environmental compliance certificate", "compliance certificate"),      # Philippines -- ECC
+    ("mining lease", "mining lease"),                                        # extraction projects worldwide
+    # English planning / NEPA-style environmental-review vocabulary (global reach)
+    ("environmental impact statement", "impact statement"), ("record of decision", "record of decision"),
+    ("notice of intent", "notice of intent"), ("outline planning permission", "outline"),
+    ("major development", "major development"), ("infrastructure project", "infrastructure project"),
+    # major-infrastructure consent + expropriation regimes (the biggest land-takings)
+    ("development consent order", "consent order"),                          # UK -- DCO (nationally significant infra)
+    ("declaration d'utilite publique", "utilite publique"),                  # France -- DUP (expropriation)
+    ("planfeststellung", "planfeststellung"),                                # Germany -- plan approval (rail/road/airports)
+    ("decyzja srodowiskowa", "srodowiskowa"),                                # Poland -- environmental decision
+    ("concesion minera", "concesion minera"),                                # Spanish -- mining concession
+    ("\u74b0\u5883\u5f71\u97ff\u8a55\u4fa1", "\u74b0\u5883\u5f71\u97ff"),                # Japanese -- EIA
+    ("\ud658\uacbd\uc601\ud5a5\ud3c9\uac00", "\ud658\uacbd\uc601\ud5a5"),                # Korean -- EIA
+    ("strategic environmental assessment", "strategic environmental"),       # SEA (plans/programmes)
+    # more national permit/authorization regimes (all process datasets -> in-process)
+    ("permis de construire", "permis de construire"),                        # France -- building permit
+    ("permis d'amenager", "amenager"),                                       # France -- development permit
+    ("installation classee", "installation classee"),                        # France -- ICPE (industrial)
+    ("autorizzazione unica", "autorizzazione unica"),                        # Italy -- single authorization (energy/infra)
+    ("bauantrag", "bauantrag"),                                              # Germany -- building application
+    ("immissionsschutz", "immissionsschutz"),                                # Germany -- BImSchG (industrial permit)
+    ("izin lingkungan", "lingkungan"),                                       # Indonesia -- environmental permit
+    ("conditional use permit", "conditional use"), ("special use permit", "special use"),   # US zoning
+    ("grading permit", "grading"), ("land disturbance permit", "land disturbance"),          # US site-prep
+    ("compulsory purchase order", "compulsory purchase"),                    # UK -- expropriation
+    ("\u0111\u00e1nh gi\u00e1 t\u00e1c \u0111\u1ed9ng m\u00f4i tr\u01b0\u1eddng", "t\u00e1c \u0111\u1ed9ng m\u00f4i tr\u01b0\u1eddng"),  # Vietnamese -- EIA (DTM)
+    # more EIA regimes + land-taking consents (forestry clearance, marine, water, IPPC)
+    ("\u03c0\u03b5\u03c1\u03b9\u03b2\u03b1\u03bb\u03bb\u03bf\u03bd\u03c4\u03b9\u03ba\u03ae \u03b1\u03b4\u03b5\u03b9\u03bf\u03b4\u03cc\u03c4\u03b7\u03c3\u03b7", "\u03c0\u03b5\u03c1\u03b9\u03b2\u03b1\u03bb\u03bb\u03bf\u03bd\u03c4\u03b9\u03ba"),  # Greek -- environmental licensing
+    ("evaluarea impactului asupra mediului", "impactului"),                  # Romanian -- EIA
+    ("\u043e\u0446\u0456\u043d\u043a\u0430 \u0432\u043f\u043b\u0438\u0432\u0443 \u043d\u0430 \u0434\u043e\u0432\u043a\u0456\u043b\u043b\u044f", "\u0432\u043f\u043b\u0438\u0432\u0443"),  # Ukrainian -- EIA
+    ("marine licence", "marine licence"),                                    # marine works (offshore wind, cables, dredging)
+    ("felling licence", "felling"),                                          # forestry clearance (deforestation)
+    ("aquaculture licence", "aquaculture"),                                  # aquaculture
+    ("autorizacion ambiental integrada", "ambiental integrada"),             # Spain -- AAI (IPPC industrial)
+    ("defrichement", "defrichement"),                                        # France -- forest clearance
+    ("abstraction licence", "abstraction"),                                  # water abstraction (dams/extraction)
+    ("reserved matters", "reserved matters"),                                # UK -- planning stage
+    # further consent regimes + more national EIA names
+    ("prior approval", "prior approval"),                                    # UK -- permitted-development (masts, solar, ag)
+    ("hazardous substances consent", "hazardous substances"),                # UK -- major-hazard installations
+    ("waste management licence", "waste management"),                        # landfills / incinerators
+    ("dredging licence", "dredging"), ("foreshore licence", "foreshore"),    # marine / coastal works
+    ("energy consent", "energy consent"),                                    # UK/Scotland -- large energy schemes
+    ("ymparistovaikutusten arviointi", "arviointi"),                         # Finnish -- EIA (YVA)
+    ("procjena utjecaja na okolis", "utjecaja"),                             # Croatian -- EIA
+    ("poveikio aplinkai vertinimas", "poveikio"),                            # Lithuanian -- EIA (PAV)
+    # --- extended script coverage: South Asian, SE Asian, Caucasus, E African,
+    #     Indonesian/Vietnamese/Chinese-Trad/Ukrainian/Thai (also match new CKAN portals) ---
+    ('\u092d\u0935\u0928 \u0928\u093f\u0930\u094d\u092e\u093e\u0923 \u0905\u0928\u0941\u092e\u0924\u093f', 'nirman'),  # Hindi -- building construction permit
+    ('\u092a\u0930\u094d\u092f\u093e\u0935\u0930\u0923 \u092a\u094d\u0930\u092d\u093e\u0935 \u0906\u0915\u0932\u0928', 'paryavaran'),  # Hindi -- EIA
+    ('\u09aa\u09b0\u09bf\u09ac\u09c7\u09b6\u0997\u09a4 \u09aa\u09cd\u09b0\u09ad\u09be\u09ac \u09ae\u09c2\u09b2\u09cd\u09af\u09be\u09df\u09a8', 'probhab'),  # Bengali -- EIA
+    ('\u0b95\u0b9f\u0bcd\u0b9f\u0bbf\u0b9f \u0b85\u0ba9\u0bc1\u0bae\u0ba4\u0bbf', 'kattida'),  # Tamil -- building permit
+    ('\u067e\u0631\u0648\u0627\u0646\u0647 \u0633\u0627\u062e\u062a', 'parvane'),  # Persian -- building permit
+    ('\u0627\u0631\u0632\u06cc\u0627\u0628\u06cc \u0627\u062b\u0631\u0627\u062a \u0632\u06cc\u0633\u062a \u0645\u062d\u06cc\u0637\u06cc', 'arzyabi'),  # Persian -- EIA
+    ('\u062a\u0639\u0645\u06cc\u0631\u0627\u062a\u06cc \u0627\u062c\u0627\u0632\u062a \u0646\u0627\u0645\u06c1', 'taamir'),  # Urdu -- construction permit
+    ('\u10db\u10e8\u10d4\u10dc\u10d4\u10d1\u10dc\u10d8\u10e1 \u10dc\u10d4\u10d1\u10d0\u10e0\u10d7\u10d5\u10d0', 'mshenebl'),  # Georgian -- construction permit
+    ('\u0577\u056b\u0576\u0561\u0580\u0561\u0580\u0561\u056f\u0561\u0576 \u0569\u0578\u0582\u0575\u056c\u057f\u057e\u0578\u0582\u0569\u0575\u0578\u0582\u0576', 'shinar'),  # Armenian -- construction permit
+    ('tikinti icaz\u0259si', 'tikinti'),  # Azerbaijani -- construction permit
+    ('\u049b\u04b1\u0440\u044b\u043b\u044b\u0441\u049b\u0430 \u0440\u04b1\u049b\u0441\u0430\u0442', 'qurylys'),  # Kazakh -- construction permit
+    ('\u1017\u1010\u17d2\u178f\u17b6\u1005\u17c6\u178e\u1784\u17cb', 'samnang'),  # Khmer -- construction permit
+    ('\u1017\u1031\u102c\u1000\u103a\u101c\u102f\u1015\u103a\u101b\u1031\u1038\u1001\u103d\u1004\u1037\u103a\u1015\u103c\u102f\u1001\u103b\u1000\u103a', 'saut'),  # Burmese -- construction permit
+    ('\u0d89\u0daf\u0dd2\u0d9a\u0dd2\u0dbb\u0dd3\u0db8\u0dca \u0db6\u0dbd\u0db4\u0dad\u0dca\u200d\u0dbb\u0dba', 'idikirim'),  # Sinhala -- construction permit
+    ('\u12e8\u1130\u1295\u1263\u1273 \u134d\u124d\u12f5', 'ginbata'),  # Amharic -- construction permit
+    ('kibali cha ujenzi', 'ujenzi'),  # Swahili -- construction permit
+    ('tathmini ya athari za mazingira', 'tathmini'),  # Swahili -- EIA
+    ('\u0928\u093f\u0930\u094d\u092e\u093e\u0923 \u0905\u0928\u0941\u092e\u0924\u093f \u092a\u0924\u094d\u0930', 'nirmaan'),  # Nepali -- construction permit
+    ('izin lingkungan', 'lingkungan'),  # Indonesian -- environmental permit (also CKAN)
+    ('izin mendirikan bangunan', 'mendirikan'),  # Indonesian -- building permit / IMB
+    ('analisis dampak lingkungan', 'amdal'),  # Indonesian -- EIA / AMDAL
+    ('gi\u1ea5y ph\xe9p x\xe2y d\u1ef1ng', 'xaydung'),  # Vietnamese -- construction permit
+    ('\u0111\xe1nh gi\xe1 t\xe1c \u0111\u1ed9ng m\xf4i tr\u01b0\u1eddng', 'moitruong'),  # Vietnamese -- EIA (ĐTM)
+    ('\u5efa\u7bc9\u57f7\u7167', 'jianzhu'),  # Chinese (Trad) -- building permit
+    ('\u74b0\u5883\u5f71\u97ff\u8a55\u4f30', 'huanjing'),  # Chinese (Trad) -- EIA
+    ('\u0434\u043e\u0437\u0432\u0456\u043b \u043d\u0430 \u0431\u0443\u0434\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e', 'dozvil'),  # Ukrainian -- construction permit
+    ('\u043e\u0446\u0456\u043d\u043a\u0430 \u0432\u043f\u043b\u0438\u0432\u0443 \u043d\u0430 \u0434\u043e\u0432\u043a\u0456\u043b\u043b\u044f', 'ovd'),  # Ukrainian -- EIA (OVD)
+    ('\u0e43\u0e1a\u0e2d\u0e19\u0e38\u0e0d\u0e32\u0e15\u0e01\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07', 'kosang'),  # Thai -- construction permit
 ]
 
 # ---- significance gate for permit feeds -----------------------------------
@@ -1728,10 +1941,11 @@ def fetch_wa_sepa(days=365, cap=5000):
         out.append(p)
     return out
 
-def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
+def fetch_arcgis_hub(max_datasets=3000, min_value=1000000, per_ds=4000):
+    hub_end = time.time() + int(os.environ.get("HUB_BUDGET_MIN", "110")) * 60
     ds = []; seen_ds = set()
     for q, kw in _HUB_QUERIES:
-        for pg in range(1, 4):          # paginate the catalogue, not just page 1
+        for pg in range(1, 6):          # paginate the catalogue, not just page 1
             try:
                 surl = "https://opendata.arcgis.com/api/v3/datasets?" + urllib.parse.urlencode({
                     "q": q, "page[size]": "100", "page[number]": pg})
@@ -1752,6 +1966,10 @@ def fetch_arcgis_hub(max_datasets=400, min_value=1000000, per_ds=2000):
           % (len(ds), len(_HUB_QUERIES)))
     out = []; used = 0
     for d in ds[:max_datasets]:
+        if time.time() > hub_end:
+            _flag("arcgis hub hit %d-min budget -- remaining datasets skipped"
+                  % int(os.environ.get("HUB_BUDGET_MIN", "110")))
+            break
         attrs = d.get("attributes") or {}
         url = attrs.get("url")
         if not url or "/FeatureServer" not in url and "/MapServer" not in url:
@@ -1854,27 +2072,34 @@ def fetch_ukplanit(days=180, pg_sz=200):
         for lng0 in (-6.0, -4.5, -3.0, -1.5, 0.0):
             tiles.append("%s,%s,%s,%s" % (lng0, lat0, lng0 + 1.5, lat0 + 1.5))
     feats = []; errs = 0
+    max_pages = int(os.environ.get("UK_PLANIT_PAGES", "5"))
     for bb in tiles:
-        params = {"bbox": bb, "start_date": since, "end_date": today,
-                  "pg_sz": pg_sz, "limit": pg_sz}
-        url = "https://www.planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
-        # retry each tile a few times before giving up -- a single transient timeout
-        # used to drop a whole ~1.5deg cell of Britain and leave a persistent hole.
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
-                    "Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                    gj = json.loads(r.read().decode("utf-8", "replace"))
-                feats += gj.get("features", []) if isinstance(gj, dict) else []
-                break
-            except Exception as e:
-                if attempt == 2:
-                    errs += 1
-                    if errs == 1: print("  uk planit tile error (after retries): %s" % e)
-                else:
-                    time.sleep(1.0 * (attempt + 1))
+        for pg in range(1, max_pages + 1):       # dense tiles (London...) exceed one page
+            params = {"bbox": bb, "start_date": since, "end_date": today,
+                      "pg_sz": pg_sz, "limit": pg_sz, "pg": pg}
+            url = "https://www.planit.org.uk/api/applics/geojson?" + urllib.parse.urlencode(params)
+            # retry each page a few times before giving up -- a single transient timeout
+            # used to drop a whole ~1.5deg cell of Britain and leave a persistent hole.
+            page_feats = None
+            for attempt in range(3):
+                try:
+                    req = urllib.request.Request(url, headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; project-map/1.0; +wheelock.chris@gmail.com)",
+                        "Accept": "application/json"})
+                    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                        gj = json.loads(r.read().decode("utf-8", "replace"))
+                    page_feats = gj.get("features", []) if isinstance(gj, dict) else []
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        errs += 1
+                        if errs == 1: print("  uk planit tile error (after retries): %s" % e)
+                    else:
+                        time.sleep(1.0 * (attempt + 1))
+            if page_feats is None: break          # page failed after retries -> next tile
+            feats += page_feats
+            if len(page_feats) < pg_sz: break     # tile exhausted -> no more pages
+            time.sleep(0.4)
         time.sleep(0.4)
     print("  uk planit: %d applications across %d tiles (%d tile errors)" % (len(feats), len(tiles), errs))
     out = []; skipped = 0
@@ -1945,7 +2170,7 @@ def _geom_center(geom):
     if not pts: return None
     return (sum(a for a, _ in pts) / len(pts), sum(b for _, b in pts) / len(pts))
 
-def _arcgis_query_all(base_url, layer=0, page=2000, max_pages=20, label=""):
+def _arcgis_query_all(base_url, layer=0, page=2000, max_pages=30, label=""):
     """Query an ArcGIS layer with resultOffset paging -- returns ALL features."""
     feats = []
     for pg in range(max_pages):
@@ -2284,7 +2509,7 @@ def _arcgis_discover_one(url, title, host, layer=0, floor=5000000):
         if p: out.append(p)
     return out[:_DISCOVERY_PORTAL_CAP]
 
-_ARCGIS_DISCOVERY_CAP = 25
+_ARCGIS_DISCOVERY_CAP = 120
 def fetch_arcgis_discovered(max_services=_ARCGIS_DISCOVERY_CAP):
     """Find fresh building/construction-permit Feature Services via the ArcGIS
     Online item-search API and harvest each ($5M-gated, coords-required). Twin of
@@ -2485,7 +2710,7 @@ def fetch_portugal_eia():
 CHILE_SEIA_EIA = ("https://arcgisv11.sea.gob.cl/server/rest/services/"
                   "WEBServices/ProyectosSEIA/MapServer/1/query")
 
-def fetch_chile_seia(pages=6, per=2000, approved_months=36):
+def fetch_chile_seia(pages=10, per=2000, approved_months=36):
     import json as _json
     out = []
     cutoff = (time.time() - approved_months * 2629800) * 1000.0     # ms epoch, ~36 mo
@@ -2569,7 +2794,7 @@ PERU_SENACE = ("https://geosenace.senace.gob.pe/arcgis/rest/services/"
 _PE_DEAD = ("desaprob", "no conforme", "archivad", "desist", "denegad", "rechaz",
             "abandonad", "caducad", "no admit")
 
-def fetch_peru_senace(pages=6, per=1000):
+def fetch_peru_senace(pages=10, per=1000):
     out = []
     def pick(keys, *subs):
         for k in keys:
@@ -2637,6 +2862,433 @@ def fetch_peru_senace(pages=6, per=1000):
         if len(feats) < per:
             break
     print("  peru senace: %d SENACE projects" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Australia (New South Wales) -- NSW "Major Projects" register: State Significant
+# Development / Infrastructure assessed by the NSW Dept of Planning (the mines,
+# quarries, data centres, warehouses, energy and big subdivisions that bypass
+# local councils). VERIFIED live ArcGIS MapServer, point geometry, SR 4283 ->
+# queried as 4326: REI/Major_Projects/MapServer/0, Display Field "Name", status
+# field "Case_status" with values Open*/Pending*/Recommendation/Resolved-*. Scope
+# gate keeps only PRE-DECISION cases (Open, Pending, Recommendation = proposed /
+# under assessment); Resolved-* (decided) and any unrecognized status are dropped
+# (fail-safe). Attribute names beyond Name/Case_status aren't confirmable from
+# here, so they're detected at RUNTIME rather than guessed. FIRST-RUN REVIEW.
+# ---------------------------------------------------------------------------
+NSW_MAJOR = ("https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/"
+             "REI/Major_Projects/MapServer/0/query")
+
+def fetch_nsw_major(pages=12, per=1000):
+    out = []; fields = None
+    for pg in range(pages):
+        params = {"where": "1=1", "outFields": "*", "f": "geojson",
+                  "outSR": "4326", "resultRecordCount": per, "resultOffset": pg * per}
+        try:
+            gj = _get_json(NSW_MAJOR + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            print("  nsw major: page %d failed: %s" % (pg, e)); break
+        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+        if not feats:
+            break
+        if fields is None:                                    # runtime field detection
+            cols = list((feats[0].get("properties") or {}).keys())
+            fields = {
+                "name":   _sniff_col(cols, "name", "project", "title") or "Name",
+                "status": _sniff_col(cols, "case_status", "status", "stage") or "Case_status",
+                "type":   _sniff_col(cols, "developmenttype", "type", "category", "class", "purpose"),
+                "who":    _sniff_col(cols, "applicant", "proponent", "developer", "company"),
+                "date":   _sniff_col(cols, "lodge", "submitted", "received", "date"),
+                "url":    _sniff_col(cols, "url", "link", "majorproject", "planningportal"),
+                "lga":    _sniff_col(cols, "lga", "council", "localgov", "region"),
+            }
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") != "Point" or len(c) < 2:
+                    continue
+                lng, lat = float(c[0]), float(c[1])
+                pr = f.get("properties") or {}
+                status = str(pr.get(fields["status"]) or "").strip()
+                sl = status.lower()
+                # in-process gate (fail-safe whitelist): only PRE-DECISION stages kept
+                if not (sl.startswith("open") or sl.startswith("pending")
+                        or sl.startswith("recommend")):
+                    continue
+                name = str(pr.get(fields["name"]) or "Major project").strip()[:140]
+                typ = (str(pr.get(fields["type"]) or "").strip()[:60] if fields["type"] else "")
+                lga = (str(pr.get(fields["lga"]) or "").strip() if fields["lga"] else "")
+                who = (str(pr.get(fields["who"]) or "").strip()[:80] if fields["who"] else "")
+                url = (str(pr.get(fields["url"]) or "").strip() if fields["url"] else "")
+                if not url.startswith("http"):
+                    url = "https://www.planningportal.nsw.gov.au/major-projects"
+                p = {"name": name,
+                     "type": typ or "State significant project",
+                     "state": "Australia \u2014 New South Wales" + ((" \u2014 " + lga) if lga else ""),
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                     "value_usd": None, "size": "",
+                     "status": status,
+                     "company": who,
+                     "url": url,
+                     "date": (_iso_date(pr.get(fields["date"])) if fields["date"] else ""),
+                     "desc": ("NSW State Significant project under the Major Projects "
+                              "assessment pathway -- the mines, quarries, energy, data "
+                              "centres, warehouses and large subdivisions decided by the "
+                              "state rather than local councils. Open the case on the NSW "
+                              "Planning Portal for the EIS, the exhibition period and how "
+                              "to make a submission."),
+                     "source": "nsw_major"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        if len(feats) < per:
+            break
+    print("  nsw major: %d in-process state-significant projects" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Australia (Queensland) -- the Coordinator-General's "Coordinated Projects":
+# large infrastructure (mines, dams, ports, pipelines, industrial precincts)
+# declared under the State Development and Public Works Organisation Act and put
+# through a state-run impact assessment. VERIFIED live ArcGIS MapServer (layer 10),
+# POLYGON geometry, SR 4283 -> queried as 4326, Display Field "name":
+# PlanningCadastre/CoordinatedProjects/MapServer/10. Polygons are reduced to a
+# centroid (precise:false). A status/stage field is detected at RUNTIME and gated
+# fail-safe; if none is present the layer is, by its own description, "current
+# proposed infrastructure", so rows are kept. FIRST-RUN REVIEW.
+# ---------------------------------------------------------------------------
+QLD_COORD = ("https://spatial-gis.information.qld.gov.au/arcgis/rest/services/"
+             "PlanningCadastre/CoordinatedProjects/MapServer/10/query")
+_AU_DEAD = ("complet", "finish", "lapsed", "withdraw", "cancel", "closed",
+            "not proceed", "decommission", "operational", "operating")
+_AU_LIVE = ("declar", "eis", "assess", "current", "propos", "under", "progress",
+            "review", "evaluat", "application", "pending", "active", "notif")
+
+def fetch_qld_coordinated(pages=8, per=2000):
+    out = []; fields = None
+    for pg in range(pages):
+        params = {"where": "1=1", "outFields": "*", "f": "geojson", "outSR": "4326",
+                  "resultRecordCount": per, "resultOffset": pg * per}
+        try:
+            gj = _get_json(QLD_COORD + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            print("  qld coordinated: page %d failed: %s" % (pg, e)); break
+        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+        if not feats:
+            break
+        if fields is None:
+            cols = list((feats[0].get("properties") or {}).keys())
+            fields = {
+                "name":   _sniff_col(cols, "name", "project", "title") or "name",
+                "status": _sniff_col(cols, "status", "stage", "phase", "progress"),
+                "type":   _sniff_col(cols, "type", "category", "sector", "class"),
+                "who":    _sniff_col(cols, "proponent", "applicant", "developer", "company"),
+                "url":    _sniff_col(cols, "url", "link", "web"),
+                "date":   _sniff_col(cols, "declared", "lodged", "date"),
+            }
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}
+                if geom.get("type") == "Point":
+                    c = geom.get("coordinates") or []
+                    if len(c) < 2: continue
+                    lat, lng, precise = float(c[1]), float(c[0]), True
+                else:
+                    ctr = _geom_center(geom)
+                    if not ctr: continue
+                    lat, lng, precise = ctr[0], ctr[1], False
+                pr = f.get("properties") or {}
+                status = str(pr.get(fields["status"]) or "").strip() if fields["status"] else ""
+                sl = status.lower()
+                if sl:                                        # gate only when status present (fail-safe)
+                    if any(d in sl for d in _AU_DEAD): continue
+                    if not any(k in sl for k in _AU_LIVE): continue
+                name = str(pr.get(fields["name"]) or "Coordinated project").strip()[:140]
+                typ = (str(pr.get(fields["type"]) or "").strip()[:60] if fields["type"] else "")
+                who = (str(pr.get(fields["who"]) or "").strip()[:80] if fields["who"] else "")
+                url = (str(pr.get(fields["url"]) or "").strip() if fields["url"] else "")
+                if not url.startswith("http"):
+                    url = "https://www.statedevelopment.qld.gov.au/coordinator-general/assessments-and-approvals/coordinated-projects"
+                p = {"name": name,
+                     "type": typ or "Coordinated project (infrastructure)",
+                     "state": "Australia \u2014 Queensland",
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": precise,
+                     "value_usd": None, "size": "",
+                     "status": status or "Coordinated project",
+                     "company": who,
+                     "url": url,
+                     "date": (_iso_date(pr.get(fields["date"])) if fields["date"] else ""),
+                     "desc": ("Queensland Coordinated Project -- major infrastructure "
+                              "(mines, dams, ports, pipelines, industrial precincts) declared "
+                              "for a state-run impact assessment by the Coordinator-General. "
+                              "Open the project page for the EIS, the submission period and the "
+                              "assessment documents."),
+                     "source": "qld_coordinated"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        if len(feats) < per:
+            break
+    print("  qld coordinated: %d coordinated projects" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Canada (British Columbia) -- EAO Project Information Centre (EPIC): the major
+# projects (mines, LNG, pipelines, dams, resorts) going through BC's provincial
+# environmental assessment. VERIFIED public layer EPIC_PROJECT_POINTS_SVW in the
+# BC Geographic Warehouse, updated daily, served as GeoJSON over the province's
+# WFS (openmaps.gov.bc.ca). POINT geometry. Field names + status vocabulary aren't
+# confirmable from here, so both are handled at RUNTIME: fields sniffed, and the
+# in-process gate keeps only pre-decision phases (pre-application / application /
+# assessment / under review / in progress) while dropping certified, withdrawn,
+# terminated and completed (fail-safe -- unrecognized statuses are dropped).
+# Project pages: projects.eao.gov.bc.ca. FIRST-RUN REVIEW.
+# ---------------------------------------------------------------------------
+BC_EAO = ("https://openmaps.gov.bc.ca/geo/pub/"
+          "WHSE_ENVIRONMENT_ASSESSMENT.EPIC_PROJECT_POINTS_SVW/ows")
+_BC_LIVE = ("pre-application", "pre application", "application", "assess", "under review",
+            "in progress", "review", "screening", "propos", "pending", "readiness",
+            "effects", "recommend")
+_BC_DEAD = ("certif", "certificate", "complet", "withdraw", "terminat", "decommission",
+            "not certified", "exempt", "closed", "abandon", "operating", "operational",
+            "post-certificate", "post certificate")
+
+def fetch_bc_eao(pages=10, per=1000):
+    out = []; fields = None
+    for pg in range(pages):
+        params = {"service": "WFS", "version": "2.0.0", "request": "GetFeature",
+                  "typeNames": "pub:WHSE_ENVIRONMENT_ASSESSMENT.EPIC_PROJECT_POINTS_SVW",
+                  "outputFormat": "application/json", "srsName": "EPSG:4326",
+                  "count": per, "startIndex": pg * per}
+        try:
+            gj = _get_json(BC_EAO + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            print("  bc eao: page %d failed: %s" % (pg, e)); break
+        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+        if not feats:
+            break
+        if fields is None:
+            cols = list((feats[0].get("properties") or {}).keys())
+            fields = {
+                "name":   _sniff_col(cols, "project_name", "name", "proj", "title"),
+                "status": _sniff_col(cols, "status", "phase", "stage", "current_phase", "disposition"),
+                "type":   _sniff_col(cols, "type", "category", "sector", "purpose"),
+                "who":    _sniff_col(cols, "proponent", "applicant", "developer", "company"),
+                "url":    _sniff_col(cols, "url", "link", "web", "project_url"),
+            }
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") != "Point" or len(c) < 2:
+                    continue
+                lng, lat = float(c[0]), float(c[1])
+                pr = f.get("properties") or {}
+                status = str(pr.get(fields["status"]) or "").strip() if fields["status"] else ""
+                sl = status.lower()
+                # in-process gate: keep only pre-decision phases; drop decided/unknown (fail-safe)
+                if any(d in sl for d in _BC_DEAD): continue
+                if not any(k in sl for k in _BC_LIVE): continue
+                name = (str(pr.get(fields["name"]) or "").strip()[:140] if fields["name"] else "")
+                if not name: name = "EAO project"
+                typ = (str(pr.get(fields["type"]) or "").strip()[:60] if fields["type"] else "")
+                who = (str(pr.get(fields["who"]) or "").strip()[:80] if fields["who"] else "")
+                url = (str(pr.get(fields["url"]) or "").strip() if fields["url"] else "")
+                if not url.startswith("http"):
+                    url = "https://projects.eao.gov.bc.ca/"
+                p = {"name": name,
+                     "type": typ or "Environmental assessment (BC)",
+                     "state": "Canada \u2014 British Columbia",
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                     "value_usd": None, "size": "",
+                     "status": status,
+                     "company": who,
+                     "url": url,
+                     "date": "",
+                     "desc": ("Major project under British Columbia's provincial "
+                              "environmental assessment (EAO) -- mines, LNG, pipelines, dams "
+                              "and resorts. Open the project on EPIC for the assessment "
+                              "documents, the comment periods and how to participate."),
+                     "source": "bc_eao"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        if len(feats) < per:
+            break
+    print("  bc eao: %d in-process EA projects" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Canada (Saskatchewan) -- Ministry of Environment, Environmental Assessment
+# Branch. The public EASProjects ArcGIS service exposes the projects moving
+# through the province's EA process. VERIFIED live (production host, no token):
+# gis.saskatchewan.ca/arcgis/rest/services/EASProjects/MapServer -- point layers
+# 0 "Active Applications" and 1 "Active EIA Projects" are the in-process ones
+# (layers 2/3 are Historical and are skipped). SR 2957 -> queried as 4326,
+# geoJSON supported. The layers are the province's OWN "active" classification, so
+# they're kept as-is; a status field, if present, is gated fail-safe to drop any
+# stray decided/withdrawn rows. Attribution: Environmental Assessment Branch,
+# Saskatchewan Ministry of Environment. Field names detected at RUNTIME.
+# FIRST-RUN REVIEW.
+# ---------------------------------------------------------------------------
+SASK_EAS = ("https://gis.saskatchewan.ca/arcgis/rest/services/"
+            "EASProjects/MapServer/%d/query")
+
+def fetch_sask_eia(per=2000):
+    out = []
+    for layer in (0, 1):                      # 0 Active Applications, 1 Active EIA Projects
+        fields = None
+        for pg in range(4):
+            params = {"where": "1=1", "outFields": "*", "f": "geojson", "outSR": "4326",
+                      "resultRecordCount": per, "resultOffset": pg * per}
+            try:
+                gj = _get_json((SASK_EAS % layer) + "?" + urllib.parse.urlencode(params))
+            except Exception as e:
+                print("  sask eia L%d: page %d failed: %s" % (layer, pg, e)); break
+            feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+            if not feats:
+                break
+            if fields is None:
+                cols = list((feats[0].get("properties") or {}).keys())
+                fields = {
+                    "name":   _sniff_col(cols, "project", "name", "title", "proposal"),
+                    "status": _sniff_col(cols, "status", "stage", "phase", "decision"),
+                    "type":   _sniff_col(cols, "type", "category", "sector", "class", "nature"),
+                    "who":    _sniff_col(cols, "proponent", "applicant", "developer", "company", "owner"),
+                    "date":   _sniff_col(cols, "received", "submitted", "date", "lodged"),
+                    "url":    _sniff_col(cols, "url", "link", "web"),
+                }
+            for f in feats:
+                try:
+                    geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                    if geom.get("type") != "Point" or len(c) < 2:
+                        continue
+                    lng, lat = float(c[0]), float(c[1])
+                    pr = f.get("properties") or {}
+                    status = str(pr.get(fields["status"]) or "").strip() if fields["status"] else ""
+                    sl = status.lower()
+                    if sl and any(d in sl for d in _AU_DEAD):     # fail-safe: drop stray decided/withdrawn
+                        continue
+                    name = (str(pr.get(fields["name"]) or "").strip()[:140] if fields["name"] else "")
+                    if not name: name = "Environmental assessment project"
+                    typ = (str(pr.get(fields["type"]) or "").strip()[:60] if fields["type"] else "")
+                    who = (str(pr.get(fields["who"]) or "").strip()[:80] if fields["who"] else "")
+                    url = (str(pr.get(fields["url"]) or "").strip() if fields["url"] else "")
+                    if not url.startswith("http"):
+                        url = ("https://www.saskatchewan.ca/business/environmental-protection-and-"
+                               "sustainability/environmental-assessment/environmental-assessment-projects")
+                    p = {"name": name,
+                         "type": typ or ("Application (EA)" if layer == 0 else "Environmental assessment"),
+                         "state": "Canada \u2014 Saskatchewan",
+                         "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                         "value_usd": None, "size": "",
+                         "status": status or ("Active application" if layer == 0 else "Active EIA project"),
+                         "company": who,
+                         "url": url,
+                         "date": (_iso_date(pr.get(fields["date"])) if fields["date"] else ""),
+                         "desc": ("Project under Saskatchewan's environmental assessment process "
+                                  "(mines, dams, power, industry, infrastructure). Open the province's "
+                                  "EA projects list for the technical proposal, the public-comment "
+                                  "window and the Minister's decision. Source: Environmental "
+                                  "Assessment Branch, Saskatchewan Ministry of Environment."),
+                         "source": "sask_eia"}
+                    p["impact"] = rate_project(p, sensitivity=1)
+                    out.append(p)
+                except Exception:
+                    continue
+            if len(feats) < per:
+                break
+    print("  sask eia: %d active EA projects/applications" % len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Ireland -- national EIA Location Point layer (the "Environmental Impact
+# Assessment Open Data Project", implementing EU Directive 2014/52/EU). VERIFIED
+# public ArcGIS FeatureServer, CC-BY 4.0, point geometry:
+# services.arcgis.com/NzlPQPKn5QF9v2US/.../EIA_Location_Point/FeatureServer/0
+# This complements ireland_planning (the National Planning Application Database) by
+# pinning the projects that actually triggered a full EIA -- the biggest builds.
+# Overlap with ireland_planning is removed by the harvester's coordinate dedup.
+# Field names / decision vocabulary aren't confirmable from here, so both are
+# handled at RUNTIME; the gate drops clearly-decided rows (granted / refused /
+# withdrawn / complete) fail-safe and keeps pending / new / under-consideration.
+# FIRST-RUN REVIEW.
+# ---------------------------------------------------------------------------
+IRELAND_EIA = ("https://services.arcgis.com/NzlPQPKn5QF9v2US/arcgis/rest/services/"
+               "EIA_Location_Point/FeatureServer/0/query")
+_IE_DEAD = ("grant", "refus", "withdraw", "invalid", "complet", "closed",
+            "decided", "permission", "final grant", "lapsed", "expired", "operational")
+
+def fetch_ireland_eia(pages=10, per=2000):
+    out = []; fields = None
+    for pg in range(pages):
+        params = {"where": "1=1", "outFields": "*", "f": "geojson", "outSR": "4326",
+                  "resultRecordCount": per, "resultOffset": pg * per}
+        try:
+            gj = _get_json(IRELAND_EIA + "?" + urllib.parse.urlencode(params))
+        except Exception as e:
+            print("  ireland eia: page %d failed: %s" % (pg, e)); break
+        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+        if not feats:
+            break
+        if fields is None:
+            cols = list((feats[0].get("properties") or {}).keys())
+            fields = {
+                "name":   _sniff_col(cols, "project", "development", "name", "title", "proposal"),
+                "status": _sniff_col(cols, "decision", "status", "stage", "outcome", "determination"),
+                "type":   _sniff_col(cols, "type", "class", "category", "nature", "annex"),
+                "who":    _sniff_col(cols, "applicant", "developer", "proponent", "company"),
+                "auth":   _sniff_col(cols, "authority", "council", "planning"),
+                "url":    _sniff_col(cols, "url", "link", "web", "file"),
+                "date":   _sniff_col(cols, "received", "lodged", "date", "decision_date"),
+            }
+        for f in feats:
+            try:
+                geom = f.get("geometry") or {}; c = geom.get("coordinates") or []
+                if geom.get("type") != "Point" or len(c) < 2:
+                    continue
+                lng, lat = float(c[0]), float(c[1])
+                pr = f.get("properties") or {}
+                status = str(pr.get(fields["status"]) or "").strip() if fields["status"] else ""
+                sl = status.lower()
+                if sl and any(d in sl for d in _IE_DEAD):     # fail-safe: drop decided rows
+                    continue
+                name = (str(pr.get(fields["name"]) or "").strip()[:140] if fields["name"] else "")
+                if not name: name = "EIA development"
+                typ = (str(pr.get(fields["type"]) or "").strip()[:60] if fields["type"] else "")
+                who = (str(pr.get(fields["who"]) or "").strip()[:80] if fields["who"] else "")
+                auth = (str(pr.get(fields["auth"]) or "").strip() if fields["auth"] else "")
+                url = (str(pr.get(fields["url"]) or "").strip() if fields["url"] else "")
+                if not url.startswith("http"):
+                    url = "https://data.gov.ie/dataset/eia-location-point1"
+                p = {"name": name,
+                     "type": typ or "EIA development",
+                     "state": "Ireland" + ((" \u2014 " + auth) if auth else ""),
+                     "lat": round(lat, 5), "lng": round(lng, 5), "precise": True,
+                     "value_usd": None, "size": "",
+                     "status": status,
+                     "company": who,
+                     "url": url,
+                     "date": (_iso_date(pr.get(fields["date"])) if fields["date"] else ""),
+                     "desc": ("Irish development that triggered a full Environmental Impact "
+                              "Assessment (EU Directive 2014/52/EU) -- the largest projects: "
+                              "roads, quarries, energy, waste, big housing. Open the planning "
+                              "authority's file for the EIAR and the public-participation window."),
+                     "source": "ireland_eia"}
+                p["impact"] = rate_project(p, sensitivity=1)
+                out.append(p)
+            except Exception:
+                continue
+        if len(feats) < per:
+            break
+    print("  ireland eia: %d in-process EIA developments" % len(out))
     return out
 
 
@@ -2905,19 +3557,27 @@ def _osm_existing():
 
 
 _OVERPASS_EPS = [
+    # WORLDWIDE instances only. overpass.osm.ch was removed: it is the Switzerland-
+    # only REGIONAL server, so for any non-Swiss tile it answered HTTP 200 with an
+    # empty result -- a fake "success" that stopped the quad-split from ever running.
+    # That is exactly what left the persistent grid holes over the densest regions
+    # (northern US, western Europe, east Asia): overpass-api.de timed out there,
+    # kumi failed, osm.ch "succeeded" with 0 elements, and the tile was never split.
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
-def _overpass(q, label="", deadline=None):
-    """POST an Overpass query, trying each mirror. Returns parsed JSON or None."""
+def _overpass(q, label="", deadline=None, client_timeout=120):
+    """POST an Overpass query, trying each mirror. Returns parsed JSON or None.
+    client_timeout must exceed the query's own [timeout:] so a slow-but-succeeding
+    dense query isn't killed mid-download by the client."""
     for i, ep in enumerate(_OVERPASS_EPS):
         if deadline and time.time() > deadline:
             return None                      # out of time; don't start another call
         try:
             req = urllib.request.Request(ep, data=urllib.parse.urlencode({"data": q}).encode(),
                                          headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=75) as r:
+            with urllib.request.urlopen(req, timeout=client_timeout) as r:
                 data = json.loads(r.read().decode("utf-8", "replace"))
             # Overpass answers HTTP 200 with an EMPTY elements list and a "remark"
             # when the query times out or errors server-side. Treating that as a
@@ -2941,7 +3601,7 @@ def _quarters(s, w, n, e):
     ms, mw = (s + n) / 2.0, (w + e) / 2.0
     return [(s, w, ms, mw), (s, mw, ms, e), (ms, w, n, mw), (ms, mw, n, e)]
 
-def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=4):
+def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=5):
     """Fetch one tile; on a server-side timeout, recursively split into quarters
     (up to max_depth extra levels: 5deg -> 2.5 -> 1.25 -> 0.625 -> 0.3125deg) so the
     DENSEST regions (Randstad, Ruhr, Tokyo, Seoul, coastal China) actually fill in
@@ -2950,7 +3610,9 @@ def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=4):
     Returns True if any data landed for this box."""
     if deadline and time.time() > deadline:
         return False
-    data = _overpass(_osm_query(s, w, n, e, cap), label, deadline=deadline)
+    qt = 90 if depth < 2 else 150            # deep (dense) sub-tiles get more server time
+    data = _overpass(_osm_query(s, w, n, e, cap, qt=qt), label, deadline=deadline,
+                     client_timeout=qt + 45)
     if data is not None:
         _osm_collect(data, label, out)
         return True
@@ -2964,10 +3626,9 @@ def _osm_fetch_box(s, w, n, e, cap, label, out, deadline, depth=0, max_depth=4):
         time.sleep(0.6)
     return got
 
-def _osm_query(s, w, n, e, cap):
+def _osm_query(s, w, n, e, cap, qt=90):
     bb = "%s,%s,%s,%s" % (s, w, n, e)
-    return ('[out:json][timeout:70];('
-            'way["landuse"="construction"](%s)(if:length()>400);'
+    body = ('way["landuse"="construction"](%s)(if:length()>400);'
             'way["highway"="construction"](%s)(if:length()>800);'
             'way["railway"="construction"](%s)(if:length()>800);'
             'way["building"="construction"](%s)(if:length()>250);'
@@ -2977,7 +3638,8 @@ def _osm_query(s, w, n, e, cap):
             'way["power"="plant"]["construction"](%s);'
             'way["waterway"="dam"]["construction"](%s);'
             'relation["landuse"="construction"](%s);'
-            ');out geom %d;' % (bb, bb, bb, bb, bb, bb, bb, bb, bb, bb, cap))
+            % (bb, bb, bb, bb, bb, bb, bb, bb, bb, bb))
+    return '[out:json][timeout:%d];(%s);out geom %d;' % (qt, body, cap)
 
 def _osm_measure(el, linear):
     """From out-geom geometry: (acres, miles). Area for closed features, length
@@ -3181,7 +3843,7 @@ def _ibama_national(csvs, max_rows=1500):
     print("  ibama br: %d licences (national-level placement)" % len(out))
     return out
 
-def fetch_ibama_br(max_rows=4000):
+def fetch_ibama_br(max_rows=12000):
     base = "https://dadosabertos.ibama.gov.br/api/3/action/package_show?id="
     ds = "licencas-ambientais-de-atividades-e-empreendimentos-licenciados-pelo-ibama"
     try:
@@ -3280,7 +3942,7 @@ def _fr_communes():
             continue
     return out
 
-def fetch_sitadel_fr(max_rows=3000, months=12):
+def fetch_sitadel_fr(max_rows=40000, months=24):
     com = _fr_communes()
     if not com:
         print("  sitadel fr: no commune centroids (skip)"); return []
@@ -3533,22 +4195,2961 @@ _CKAN_PORTALS = [
     ("https://dane.gov.pl", "Poland", "pl"),
     ("https://data.norge.no", "Norway", "no"),
     ("https://www.govdata.de/ckan", "Germany", "de"),
+    # additional national CKAN instances (all expose /api/3/action/package_search)
+    ("https://data.gov.uk", "United Kingdom", "gb"),
+    ("https://catalog.data.gov", "United States", "us"),
+    ("https://open.canada.ca/data/en", "Canada", "ca"),
+    ("https://datos.gob.ar", "Argentina", "ar"),
+    ("https://datos.gob.mx/busca", "Mexico", "mx"),
+    ("https://www.data.gv.at/katalog", "Austria", "at"),
+    ("https://data.gov.ro", "Romania", "ro"),
+    ("https://www.avoindata.fi/data/en", "Finland", "fi"),
+    # Latin America + Eastern Europe national CKAN instances
+    ("https://catalogodatos.gub.uy", "Uruguay", "uy"),
+    ("https://www.datosabiertos.gob.pe", "Peru", "pe"),
+    ("https://datosabiertos.gob.ec", "Ecuador", "ec"),
+    ("https://www.datos.gov.py", "Paraguay", "py"),
+    ("https://data.gov.hr", "Croatia", "hr"),
+    ("https://data.gov.ua", "Ukraine", "ua"),
+    ("https://date.gov.md", "Moldova", "md"),
+    # SE Asia + more of the Balkans/Baltics
+    ("https://data.go.th", "Thailand", "th"),
+    ("https://data.gov.rs", "Serbia", "rs"),
+    ("https://data.gov.lv", "Latvia", "lv"),
+    ("https://podatki.gov.si", "Slovenia", "si"),
+    ("https://data.gov.tn", "Tunisia", "tn"),
+    ("https://data.gov.cy", "Cyprus", "cy"),
+    ("https://data.gov.mt", "Malta", "mt"),
+    ("https://data.public.lu", "Luxembourg", "lu"),
+    # more verified-CKAN portals (national + a subnational + a pan-African aggregator)
+    ("https://www.data.go.jp/data", "Japan", "jp"),
+    ("https://data.sa.gov.au/data", "South Australia", "au"),
+    ("https://africaopendata.org", "openAFRICA", "af"),
+    ("https://data.gov.il", "Israel", "il"),
+    ("https://datos.gob.do", "Dominican Republic", "do"),
+    ("https://portal.opendata.dk", "Denmark", "dk"),
+    # registry-verified (commondataio) national aggregators -- new countries/territories
+    ("https://datos.gob.bo", "Bolivia", "bo"),
+    ("https://opendata.government.bg", "Bulgaria", "bg"),
+    ("https://data.gov.et", "Ethiopia", "et"),
+    ("https://datosabiertos.gob.hn", "Honduras", "hn"),
+    ("https://data.gov.kg", "Kyrgyzstan", "kg"),
+    ("https://opendata.gov.mn", "Mongolia", "mn"),
+    ("https://www.data.gov.ma", "Morocco", "ma"),
+    ("https://datosabiertos.gob.pa", "Panama", "pa"),
+    ("https://data.gov.mk", "North Macedonia", "mk"),
+    ("https://data.gov.sk", "Slovakia", "sk"),
+    ("https://www.data.gov.so", "Somalia", "so"),
+    ("https://data.gov.tt", "Trinidad and Tobago", "tt"),
+    ("https://opendata.gov.je", "Jersey", "je"),
+    # thematic ministry portals most likely to hold geo project/EIA data
+    ("https://datos.ambiente.gob.ar", "Argentina \u2014 environment", "ar"),
+    ("https://datos.energia.gob.ar", "Argentina \u2014 energy", "ar"),
+    ("https://dados.ana.gov.br", "Brazil \u2014 water/ANA", "br"),
+    ("https://dados.infraestrutura.gov.br", "Brazil \u2014 infrastructure", "br"),
+    ("https://data.forest.go.th", "Thailand \u2014 forestry", "th"),
+    ("https://energydata.info", "Global energy (ESMAP/WB)", "xx"),
+    # more registry-verified government thematic portals (project/infra/forestry)
+    ("https://datos.minem.gob.ar", "Argentina \u2014 energy/mining", "ar"),
+    ("https://datos.transporte.gob.ar", "Argentina \u2014 transport", "ar"),
+    ("https://dados.florestal.gov.br", "Brazil \u2014 forest service", "br"),
+    ("https://dados.transportes.gov.br", "Brazil \u2014 transport", "br"),
+    ("https://www.juntadeandalucia.es/datosabiertos/portal", "Spain \u2014 Andalusia", "es"),
+    ("https://gdcatalog.energy.go.th", "Thailand \u2014 energy", "th"),
+    ("https://dataportal.drr.go.th", "Thailand \u2014 rural roads", "th"),
+    ("https://dataportal.gov.tc", "Turks and Caicos", "tc"),
+    ("https://dados.mma.gov.br", "Brazil \u2014 environment ministry", "br"),
+    ("https://datosretc.mma.gob.cl", "Chile \u2014 environment/RETC", "cl"),
+    ("https://opendata.housing.gov.ie", "Ireland \u2014 housing", "ie"),
+    # --- international subnational (state/province/regional) government CKAN portals,
+    # mined from commondataio/dataportals-registry (owner.type=Regional government, non-US,
+    # audit/health/legislative/stats hosts excluded). Budget-protected; FIRST-RUN REVIEW. ---
+    ("http://datos.neuquen.gob.ar", "Argentina", "ar"),
+    ("https://catalogo.datos.gba.gob.ar", "Argentina", "ar"),
+    ("https://datos.acumar.gov.ar", "Argentina", "ar"),
+    ("https://datos.entrerios.gov.ar", "Argentina", "ar"),
+    ("https://datos.santafe.gob.ar", "Argentina", "ar"),
+    ("https://datosabiertos.mendoza.gov.ar", "Argentina", "ar"),
+    ("https://sep.tucuman.gob.ar", "Argentina", "ar"),
+    ("https://www.datos.misiones.gob.ar", "Argentina", "ar"),
+    ("https://catalogue.data.wa.gov.au", "Australia", "au"),
+    ("https://data.cese.nsw.gov.au", "Australia", "au"),
+    ("https://data.nsw.gov.au/data", "Australia", "au"),
+    ("https://data.nt.gov.au", "Australia", "au"),
+    ("https://data.qld.gov.au", "Australia", "au"),
+    ("https://data.vic.gov.au", "Australia", "au"),
+    ("https://datasets.seed.nsw.gov.au", "Australia", "au"),
+    ("https://discover.data.vic.gov.au", "Australia", "au"),
+    ("https://geoscience.data.qld.gov.au", "Australia", "au"),
+    ("https://opendata.transport.nsw.gov.au", "Australia", "au"),
+    ("http://catalogo.governoaberto.sp.gov.br", "Brazil", "br"),
+    ("https://dados.ac.gov.br", "Brazil", "br"),
+    ("https://dados.al.gov.br/catalogo", "Brazil", "br"),
+    ("https://dados.ba.gov.br", "Brazil", "br"),
+    ("https://dados.es.gov.br", "Brazil", "br"),
+    ("https://dados.mg.gov.br", "Brazil", "br"),
+    ("https://dados.pe.gov.br", "Brazil", "br"),
+    ("https://dados.rs.gov.br", "Brazil", "br"),
+    ("https://dados.sc.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.ba.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.go.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.sp.gov.br", "Brazil", "br"),
+    ("https://data.se.df.gov.br", "Brazil", "br"),
+    ("https://portal.dados.al.gov.br", "Brazil", "br"),
+    ("https://ppn.sc.gov.br", "Brazil", "br"),
+    ("https://catalogue.data.gov.bc.ca", "Canada", "ca"),
+    ("https://opendata.gov.nt.ca", "Canada", "ca"),
+    ("https://datosabiertos.bogota.gov.co", "Colombia", "co"),
+    ("https://datosabiertos.valledelcauca.gov.co", "Colombia", "co"),
+    ("https://datosabiertos.carchi.gob.ec", "Ecuador", "ec"),
+    ("https://sil.eloro.gob.ec", "Ecuador", "ec"),
+    ("https://admin.opendatani.gov.uk", "United Kingdom", "gb"),
+    ("https://ckan.diskominfo.sultengprov.go.id", "Indonesia", "id"),
+    ("https://ckan.jombangkab.go.id", "Indonesia", "id"),
+    ("https://data.acehbaratkab.go.id", "Indonesia", "id"),
+    ("https://data.acehselatankab.go.id", "Indonesia", "id"),
+    ("https://data.bengkuluutarakab.go.id", "Indonesia", "id"),
+    ("https://data.halmaherautarakab.go.id", "Indonesia", "id"),
+    ("https://data.inhilkab.go.id", "Indonesia", "id"),
+    ("https://data.jatengprov.go.id", "Indonesia", "id"),
+    ("https://data.kalbarprov.go.id", "Indonesia", "id"),
+    ("https://data.kaltaraprov.go.id", "Indonesia", "id"),
+    ("https://data.kaltimprov.go.id", "Indonesia", "id"),
+    ("https://data.kutaitimurkab.go.id", "Indonesia", "id"),
+    ("https://data.papuabaratprov.go.id", "Indonesia", "id"),
+    ("https://data.pekalongankab.go.id", "Indonesia", "id"),
+    ("https://data.purbalinggakab.go.id", "Indonesia", "id"),
+    ("https://data.sumbarprov.go.id", "Indonesia", "id"),
+    ("https://opendata.bogorkab.go.id", "Indonesia", "id"),
+    ("https://opendata.kebumenkab.go.id", "Indonesia", "id"),
+    ("https://satudataindonesia.malukuprov.go.id", "Indonesia", "id"),
+    ("http://datos.mpiochih.gob.mx", "Mexico", "mx"),
+    ("https://datos.qroo.gob.mx", "Mexico", "mx"),
+    ("https://datos.slp.gob.mx", "Mexico", "mx"),
+    ("https://datos15-21.slp.gob.mx", "Mexico", "mx"),
+    ("https://data.sarawak.gov.my", "Malaysia", "my"),
+    ("http://sbsopendata.ekitistate.gov.ng", "Nigeria", "ng"),
+    ("https://opendata.kp.gov.pk", "Pakistan", "pk"),
+    ("https://opendata.azores.gov.pt", "Portugal", "pt"),
+    ("https://data.bangkok.go.th", "Thailand", "th"),
+    ("http://ckan.tycg.gov.tw", "Taiwan", "tw"),
+    ("https://data.kcg.gov.tw", "Taiwan", "tw"),
+    ("https://data.nantou.gov.tw", "Taiwan", "tw"),
+    ("https://data.tainan.gov.tw", "Taiwan", "tw"),
+    ("https://opendata.e-land.gov.tw", "Taiwan", "tw"),
+    ("https://opendata.penghu.gov.tw", "Taiwan", "tw"),
+    ("https://opendata.taichung.gov.tw", "Taiwan", "tw"),
+    ("https://data.carpathia.gov.ua", "Ukraine", "ua"),
+    ("https://data.loda.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.vin.gov.ua", "Ukraine", "ua"),
+    ("http://csdlcntmgialai.gov.vn", "Vietnam", "vn"),
+    ("https://data.haugiang.gov.vn", "Vietnam", "vn"),
+    ("https://data.longan.gov.vn", "Vietnam", "vn"),
+    ("https://data.ninhbinh.gov.vn", "Vietnam", "vn"),
+    ("https://opendata.quangngai.gov.vn", "Vietnam", "vn"),
+    ("https://opendata.thanhhoa.gov.vn", "Vietnam", "vn"),
+    ("https://opendata.vinhlong.gov.vn", "Vietnam", "vn"),
+    # --- major-city municipal government CKAN portals (non-US, big/capital cities;
+    #     lowest priority so budget cuts these first). FIRST-RUN REVIEW. ---
+    ("http://concejoabierto.cdcordoba.gob.ar", "Argentina", "ar"),
+    ("http://datos.concejorosario.gov.ar", "Argentina", "ar"),
+    ("https://data.buenosaires.gob.ar", "Argentina", "ar"),
+    ("https://dados.fortaleza.ce.gov.br", "Brazil", "br"),
+    ("https://dados.portoalegre.rs.gov.br", "Brazil", "br"),
+    ("https://dados.recife.pe.gov.br", "Brazil", "br"),
+    ("https://datos.cali.gov.co", "Colombia", "co"),
+    ("https://gobiernoabierto.quito.gob.ec/catalogo-datos-abiertos", "Ecuador", "ec"),
+    ("https://data.glasgow.gov.uk", "United Kingdom", "gb"),
+    ("https://data.london.gov.uk", "United Kingdom", "gb"),
+    ("https://www.cityobservatory.birmingham.gov.uk", "United Kingdom", "gb"),
+    ("http://opendata.semarangkota.go.id", "Indonesia", "id"),
+    ("https://danta-admin.bekasikota.go.id", "Indonesia", "id"),
+    ("https://data.bandung.go.id", "Indonesia", "id"),
+    ("https://data.pemalangkab.go.id", "Indonesia", "id"),
+    ("https://data.tangerangselatankota.go.id", "Indonesia", "id"),
+    ("https://opendata.surabaya.go.id", "Indonesia", "id"),
+    ("https://satudata.palembang.go.id", "Indonesia", "id"),
+    ("https://datos.cdmx.gob.mx", "Mexico", "mx"),
+    ("https://datos.monterrey.gob.mx", "Mexico", "mx"),
+    # -- widest-net sweep: remaining international gov CKAN (all tiers) --
+    ("https://opendata.fcsc.gov.ae", "United Arab Emirates", "ae"),
+    ("https://opendata.moei.gov.ae/ckan", "United Arab Emirates", "ae"),
+    ("http://datos.crespo.gob.ar", "Argentina", "ar"),
+    ("http://datos.legislatura.gob.ar", "Argentina", "ar"),
+    ("http://datos.mindef.gov.ar", "Argentina", "ar"),
+    ("http://datos.quilmes.gov.ar", "Argentina", "ar"),
+    ("http://datos.salud.gob.ar", "Argentina", "ar"),
+    ("http://datos.tandil.gov.ar", "Argentina", "ar"),
+    ("http://datos.yerbabuena.gob.ar", "Argentina", "ar"),
+    ("http://datosabiertos.desarrollosocial.gob.ar", "Argentina", "ar"),
+    ("http://datosabiertos.hcdmza.gob.ar", "Argentina", "ar"),
+    ("http://datosabiertos.mercedes.gob.ar", "Argentina", "ar"),
+    ("http://datosabiertos.pergamino.gob.ar", "Argentina", "ar"),
+    ("http://datosabiertos.rafaela.gob.ar", "Argentina", "ar"),
+    ("http://goy-cte-datos.paisdigital.modernizacion.gob.ar", "Argentina", "ar"),
+    ("http://lin-bue-datos.paisdigital.modernizacion.gob.ar", "Argentina", "ar"),
+    ("http://luj-bue-datos.paisdigital.innovacion.gob.ar", "Argentina", "ar"),
+    ("http://mc.consejomagistratura.gob.ar", "Argentina", "ar"),
+    ("http://per-bue-datos.paisdigital.modernizacion.gob.ar", "Argentina", "ar"),
+    ("https://ckan.ciudaddemendoza.gob.ar", "Argentina", "ar"),
+    ("https://datasets.datos.mincyt.gob.ar", "Argentina", "ar"),
+    ("https://datos.acumar.gob.ar", "Argentina", "ar"),
+    ("https://datos.bahia.gob.ar", "Argentina", "ar"),
+    ("https://datos.ciudaddecorrientes.gov.ar", "Argentina", "ar"),
+    ("https://datos.ciudaddemendoza.gob.ar", "Argentina", "ar"),
+    ("https://datos.ciudaddemendoza.gov.ar", "Argentina", "ar"),
+    ("https://datos.csjn.gov.ar", "Argentina", "ar"),
+    ("https://datos.cultura.gob.ar", "Argentina", "ar"),
+    ("https://datos.estadistica.ec.gba.gov.ar", "Argentina", "ar"),
+    ("https://datos.jesusmaria.gov.ar", "Argentina", "ar"),
+    ("https://datos.jus.gob.ar", "Argentina", "ar"),
+    ("https://datos.magyp.gob.ar", "Argentina", "ar"),
+    ("https://datos.mininterior.gob.ar", "Argentina", "ar"),
+    ("https://datos.tsjbaires.gov.ar", "Argentina", "ar"),
+    ("https://datos.villamaria.gob.ar", "Argentina", "ar"),
+    ("https://datos.vivamoscomodoro.gob.ar", "Argentina", "ar"),
+    ("https://datos.yvera.gob.ar", "Argentina", "ar"),
+    ("https://datosabiertos.gualeguaychu.gov.ar", "Argentina", "ar"),
+    ("https://datosabiertos.municipiosanjuan.gob.ar", "Argentina", "ar"),
+    ("https://datosabiertos.sanjuan.gob.ar", "Argentina", "ar"),
+    ("https://datosestadistica.cba.gov.ar", "Argentina", "ar"),
+    ("https://datosgestionabierta.cba.gov.ar", "Argentina", "ar"),
+    ("https://transparencia.enargas.gob.ar", "Argentina", "ar"),
+    ("https://data.brisbane.qld.gov.au", "Australia", "au"),
+    ("https://data.datahub.freightaustralia.gov.au", "Australia", "au"),
+    ("https://flooddata.ses.nsw.gov.au", "Australia", "au"),
+    ("https://publications.qld.gov.au", "Australia", "au"),
+    ("http://app.podaci.gov.ba", "Bosnia and Herzegovina", "ba"),
+    ("https://catalogodedados.serpro.gov.br", "Brazil", "br"),
+    ("https://ckan.jbrj.gov.br", "Brazil", "br"),
+    ("https://ckan.pbh.gov.br", "Brazil", "br"),
+    ("https://dados.agricultura.gov.br", "Brazil", "br"),
+    ("https://dados.antt.gov.br", "Brazil", "br"),
+    ("https://dados.ciga.sc.gov.br", "Brazil", "br"),
+    ("https://dados.cultura.gov.br", "Brazil", "br"),
+    ("https://dados.cvm.gov.br", "Brazil", "br"),
+    ("https://dados.mda.gov.br", "Brazil", "br"),
+    ("https://dados.mj.gov.br", "Brazil", "br"),
+    ("https://dados.mogidascruzes.sp.gov.br", "Brazil", "br"),
+    ("https://dados.ouropreto.mg.gov.br", "Brazil", "br"),
+    ("https://dados.pbh.gov.br", "Brazil", "br"),
+    ("https://dados.prefeitura.sp.gov.br", "Brazil", "br"),
+    ("https://dados.tce.rs.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.aneel.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.bcb.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.bndes.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.capes.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.inss.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.presidencia.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.senado.gov.br", "Brazil", "br"),
+    ("https://dadosabertos.tce.go.gov.br", "Brazil", "br"),
+    ("https://inforepositorio.se.df.gov.br", "Brazil", "br"),
+    ("https://opendata.bcb.gov.br", "Brazil", "br"),
+    ("https://opendatasus.saude.gov.br", "Brazil", "br"),
+    ("https://orcamentoaberto.prefeitura.sp.gov.br", "Brazil", "br"),
+    ("https://reds.ses.pb.gov.br", "Brazil", "br"),
+    ("https://web.transparencia.pe.gov.br", "Brazil", "br"),
+    ("https://www.tesourotransparente.gov.br", "Brazil", "br"),
+    ("https://www.transparencia.mg.gov.br", "Brazil", "br"),
+    ("https://datos.odepa.gob.cl", "Chile", "cl"),
+    ("https://ider-catalogo.sdp.gov.co", "Colombia", "co"),
+    ("https://medata.gov.co", "Colombia", "co"),
+    ("https://www.postdata.gov.co", "Colombia", "co"),
+    ("https://datosabiertos.muniguarco.go.cr", "Costa Rica", "cr"),
+    ("https://datosabiertos.santaana.go.cr", "Costa Rica", "cr"),
+    ("https://ckan.issi.gov.cz", "Czech Republic", "cz"),
+    ("https://datasets.catalogue.data.gov.dk", "Denmark", "dk"),
+    ("http://sil.loja.gob.ec", "Ecuador", "ec"),
+    ("https://catalogo.datosabiertos.gob.ec", "Ecuador", "ec"),
+    ("https://cuencaendatos.cuenca.gob.ec", "Ecuador", "ec"),
+    ("http://data.ata.gov.et", "Ethiopia", "et"),
+    ("https://data.moa.gov.et", "Ethiopia", "et"),
+    ("https://data.aberdeencity.gov.uk", "United Kingdom", "gb"),
+    ("https://data.barrowbc.gov.uk", "United Kingdom", "gb"),
+    ("https://data.dundeecity.gov.uk", "United Kingdom", "gb"),
+    ("https://data.hounslow.gov.uk", "United Kingdom", "gb"),
+    ("https://data.pkc.gov.uk", "United Kingdom", "gb"),
+    ("https://dataworks.calderdale.gov.uk", "United Kingdom", "gb"),
+    ("https://opendata.angus.gov.uk", "United Kingdom", "gb"),
+    ("https://opendata.hullcc.gov.uk", "United Kingdom", "gb"),
+    ("https://publications.aberdeenshire.gov.uk", "United Kingdom", "gb"),
+    ("https://www.opendatani.gov.uk", "United Kingdom", "gb"),
+    ("http://data.nap.gov.gr", "Greece", "gr"),
+    ("https://catalog.data.gov.gr", "Greece", "gr"),
+    ("https://data.kavala.gov.gr", "Greece", "gr"),
+    ("https://diavgeia.gov.gr", "Greece", "gr"),
+    ("https://geodata.gov.gr", "Greece", "gr"),
+    ("https://opendata.agrinio.gov.gr", "Greece", "gr"),
+    ("https://repository.data.gov.gr", "Greece", "gr"),
+    ("http://catalogo.datos.gob.gt", "Guatemala", "gt"),
+    ("http://datos.conred.gob.gt", "Guatemala", "gt"),
+    ("https://catalogo.senacyt.gob.gt:80", "Guatemala", "gt"),
+    ("https://datos.minfin.gob.gt", "Guatemala", "gt"),
+    ("https://datos.segeplan.gob.gt", "Guatemala", "gt"),
+    ("https://datosabiertos.mineduc.gob.gt", "Guatemala", "gt"),
+    ("https://datosabiertos.mspas.gob.gt", "Guatemala", "gt"),
+    ("https://data.gov.hk/en-data", "Hong Kong", "hk"),
+    ("https://ckan.perpusnas.go.id", "Indonesia", "id"),
+    ("https://data.acehjayakab.go.id", "Indonesia", "id"),
+    ("https://data.balikpapan.go.id", "Indonesia", "id"),
+    ("https://data.bandaacehkota.go.id", "Indonesia", "id"),
+    ("https://data.bangkalankab.go.id", "Indonesia", "id"),
+    ("https://data.bantulkab.go.id", "Indonesia", "id"),
+    ("https://data.baritotimurkab.go.id", "Indonesia", "id"),
+    ("https://data.batangkab.go.id", "Indonesia", "id"),
+    ("https://data.batubarakab.go.id", "Indonesia", "id"),
+    ("https://data.belitung.go.id", "Indonesia", "id"),
+    ("https://data.beltim.go.id", "Indonesia", "id"),
+    ("https://data.bnpb.go.id", "Indonesia", "id"),
+    ("https://data.bontangkota.go.id", "Indonesia", "id"),
+    ("https://data.cilacapkab.go.id", "Indonesia", "id"),
+    ("https://data.dairikab.go.id", "Indonesia", "id"),
+    ("https://data.deliserdangkab.go.id", "Indonesia", "id"),
+    ("https://data.demakkab.go.id", "Indonesia", "id"),
+    ("https://data.gayolueskab.go.id", "Indonesia", "id"),
+    ("https://data.gresikkab.go.id", "Indonesia", "id"),
+    ("https://data.grobogan.go.id", "Indonesia", "id"),
+    ("https://data.kaboki.go.id", "Indonesia", "id"),
+    ("https://data.kamparkab.go.id", "Indonesia", "id"),
+    ("https://data.kendalkab.go.id", "Indonesia", "id"),
+    ("https://data.lamongankab.go.id", "Indonesia", "id"),
+    ("https://data.linggakab.go.id", "Indonesia", "id"),
+    ("https://data.magelangkota.go.id", "Indonesia", "id"),
+    ("https://data.mahakamulukab.go.id", "Indonesia", "id"),
+    ("https://data.mempawahkab.go.id", "Indonesia", "id"),
+    ("https://data.pasamanbaratkab.go.id", "Indonesia", "id"),
+    ("https://data.pasamankab.go.id", "Indonesia", "id"),
+    ("https://data.pekalongankota.go.id", "Indonesia", "id"),
+    ("https://data.pesisirselatankab.go.id", "Indonesia", "id"),
+    ("https://data.pidiejayakab.go.id", "Indonesia", "id"),
+    ("https://data.pidiekab.go.id", "Indonesia", "id"),
+    ("https://data.pontianakkota.go.id", "Indonesia", "id"),
+    ("https://data.pu.go.id", "Indonesia", "id"),
+    ("https://data.purworejokab.go.id", "Indonesia", "id"),
+    ("https://data.rsud.tulungagung.go.id", "Indonesia", "id"),
+    ("https://data.sintang.go.id", "Indonesia", "id"),
+    ("https://data.sumbawabaratkab.go.id", "Indonesia", "id"),
+    ("https://data.tanjabbarkab.go.id", "Indonesia", "id"),
+    ("https://data.tegalkab.go.id", "Indonesia", "id"),
+    ("https://data.wonogirikab.go.id", "Indonesia", "id"),
+    ("https://datasets.kaurkab.go.id", "Indonesia", "id"),
+    ("https://datasets.palukota.go.id", "Indonesia", "id"),
+    ("https://disada.lebakkab.go.id", "Indonesia", "id"),
+    ("https://katalog.data.go.id", "Indonesia", "id"),
+    ("https://katalog.data.gorontalokota.go.id", "Indonesia", "id"),
+    ("https://katalogdata.cilegon.go.id", "Indonesia", "id"),
+    ("https://mydata.sijunjung.go.id", "Indonesia", "id"),
+    ("https://opendata.blitarkab.go.id", "Indonesia", "id"),
+    ("https://opendata.bovendigoelkab.go.id", "Indonesia", "id"),
+    ("https://opendata.brebeskab.go.id", "Indonesia", "id"),
+    ("https://opendata.bulukumbakab.go.id", "Indonesia", "id"),
+    ("https://opendata.malinau.go.id", "Indonesia", "id"),
+    ("https://opendata.pacitankab.go.id", "Indonesia", "id"),
+    ("https://opendata.pandeglangkab.go.id", "Indonesia", "id"),
+    ("https://opendata.rsadhyatma.jatengprov.go.id", "Indonesia", "id"),
+    ("https://opendata.samarindakota.go.id", "Indonesia", "id"),
+    ("https://opendata.sidoarjokab.go.id", "Indonesia", "id"),
+    ("https://opendata.solselkab.go.id", "Indonesia", "id"),
+    ("https://portaldata.batukota.go.id", "Indonesia", "id"),
+    ("https://portalsatudata.simalungunkab.go.id", "Indonesia", "id"),
+    ("https://saritamura.murungrayakab.go.id", "Indonesia", "id"),
+    ("https://satudata.dharmasrayakab.go.id", "Indonesia", "id"),
+    ("https://satudata.dpd.go.id", "Indonesia", "id"),
+    ("https://satudata.kapuaskab.go.id", "Indonesia", "id"),
+    ("https://satudata.kayongutarakab.go.id", "Indonesia", "id"),
+    ("https://satudata.landakkab.go.id", "Indonesia", "id"),
+    ("https://satudata.langkatkab.go.id", "Indonesia", "id"),
+    ("https://satudata.mempawahkab.go.id", "Indonesia", "id"),
+    ("https://satudata.padang.go.id", "Indonesia", "id"),
+    ("https://satudata.palikab.go.id", "Indonesia", "id"),
+    ("https://satudata.probolinggokab.go.id", "Indonesia", "id"),
+    ("https://satudata.solokkab.go.id", "Indonesia", "id"),
+    ("https://satudata.sumbawakab.go.id", "Indonesia", "id"),
+    ("https://satudata.tojounauna.go.id", "Indonesia", "id"),
+    ("https://satudatapalapa.mojokertokab.go.id", "Indonesia", "id"),
+    ("https://sdi.katingankab.go.id", "Indonesia", "id"),
+    ("https://sdi.niasutarakab.go.id", "Indonesia", "id"),
+    ("https://sdi.palukota.go.id", "Indonesia", "id"),
+    ("https://sdi.selumakab.go.id", "Indonesia", "id"),
+    ("https://sisada.pematangsiantar.go.id", "Indonesia", "id"),
+    ("https://statistik.ponorogo.go.id", "Indonesia", "id"),
+    ("https://data.nbco.gov.ie", "Ireland", "ie"),
+    ("https://datacatalogue.gov.ie", "Ireland", "ie"),
+    ("https://opendata.agriculture.gov.ie", "Ireland", "ie"),
+    ("https://catalog.data.gov.ir", "Iran", "ir"),
+    ("https://dati.mit.gov.it/catalog", "Italy", "it"),
+    ("https://indicepa.gov.it/ipa-dati", "Italy", "it"),
+    ("https://opendata-ercolano.cultura.gov.it", "Italy", "it"),
+    ("https://data.e-gov.go.jp/data", "Japan", "jp"),
+    ("https://data.env.go.jp", "Japan", "jp"),
+    ("http://data.nsdi.go.kr", "South Korea", "kr"),
+    ("https://pilot.data.gov.la", "Laos", "la"),
+    ("https://dataset.gov.md", "Moldova", "md"),
+    ("https://edu.mrpam.gov.mn", "Mongolia", "mn"),
+    ("https://dms.hiv.health.gov.mw", "Malawi", "mw"),
+    ("https://datos.congresogto.gob.mx", "Mexico", "mx"),
+    ("https://datos.veracruzmunicipio.gob.mx", "Mexico", "mx"),
+    ("https://www2.imss.gob.mx", "Mexico", "mx"),
+    ("https://archive.data.gov.my", "Malaysia", "my"),
+    ("https://data.birgunjmun.gov.np", "Nepal", "np"),
+    ("https://data.lekbeshimun.gov.np", "Nepal", "np"),
+    ("https://data.nsonepal.gov.np", "Nepal", "np"),
+    ("https://data.tulsipurmun.gov.np", "Nepal", "np"),
+    ("https://geodata.nzpam.govt.nz", "New Zealand", "nz"),
+    ("https://datos.ins.gob.pe", "Peru", "pe"),
+    ("https://datosabiertos.mef.gob.pe", "Peru", "pe"),
+    ("https://dados.justica.gov.pt", "Portugal", "pt"),
+    ("http://data.sepa.gov.rs", "Serbia", "rs"),
+    ("http://opendata.city.tambov.gov.ru", "Russian Federation", "ru"),
+    ("https://od.data.gov.sa", "Saudi Arabia", "sa"),
+    ("http://alienfivejulyfile.doe.go.th", "Thailand", "th"),
+    ("http://ckan.dwr.go.th", "Thailand", "th"),
+    ("http://ckan.vec.go.th", "Thailand", "th"),
+    ("http://data.ieat.go.th", "Thailand", "th"),
+    ("http://opendata.alro.go.th", "Thailand", "th"),
+    ("https://cadckan.cad.go.th", "Thailand", "th"),
+    ("https://catalog-acfs.data.go.th", "Thailand", "th"),
+    ("https://catalog-cpd.data.go.th", "Thailand", "th"),
+    ("https://catalog-dga.data.go.th", "Thailand", "th"),
+    ("https://catalog.customs.go.th", "Thailand", "th"),
+    ("https://catalog.dip.go.th", "Thailand", "th"),
+    ("https://catalog.dmf.go.th", "Thailand", "th"),
+    ("https://catalog.dmh.go.th", "Thailand", "th"),
+    ("https://catalog.dnp.go.th", "Thailand", "th"),
+    ("https://catalog.doe.go.th", "Thailand", "th"),
+    ("https://catalog.dopa.go.th", "Thailand", "th"),
+    ("https://catalog.dpim.go.th", "Thailand", "th"),
+    ("https://catalog.excise.go.th", "Thailand", "th"),
+    ("https://catalog.fisheries.go.th", "Thailand", "th"),
+    ("https://catalog.fpo.go.th", "Thailand", "th"),
+    ("https://catalog.ipthailand.go.th", "Thailand", "th"),
+    ("https://catalog.moe.go.th", "Thailand", "th"),
+    ("https://catalog.mof.go.th", "Thailand", "th"),
+    ("https://catalog.nso.go.th", "Thailand", "th"),
+    ("https://catalog.ocsb.go.th", "Thailand", "th"),
+    ("https://catalog.ocsc.go.th", "Thailand", "th"),
+    ("https://catalog.qsds.go.th", "Thailand", "th"),
+    ("https://catalog.rdpb.go.th", "Thailand", "th"),
+    ("https://catalog.royalrain.go.th", "Thailand", "th"),
+    ("https://catalog.sbpac.go.th", "Thailand", "th"),
+    ("https://catalog.sepo.go.th", "Thailand", "th"),
+    ("https://catalog.sso.go.th", "Thailand", "th"),
+    ("https://catalog.tmd.go.th", "Thailand", "th"),
+    ("https://catalog.travellink.go.th", "Thailand", "th"),
+    ("https://ckan.dsi.go.th", "Thailand", "th"),
+    ("https://ckan.mots.go.th", "Thailand", "th"),
+    ("https://ckan.pdmo.go.th", "Thailand", "th"),
+    ("https://data.dmr.go.th", "Thailand", "th"),
+    ("https://data.dss.go.th", "Thailand", "th"),
+    ("https://data.mhesi.go.th", "Thailand", "th"),
+    ("https://data.onec.go.th", "Thailand", "th"),
+    ("https://datacatalog.bde.go.th", "Thailand", "th"),
+    ("https://datacatalog.dit.go.th", "Thailand", "th"),
+    ("https://datacatalog.doa.go.th", "Thailand", "th"),
+    ("https://datacatalog.moc.go.th", "Thailand", "th"),
+    ("https://datacatalog.nbtc.go.th", "Thailand", "th"),
+    ("https://datacatalog.onde.go.th", "Thailand", "th"),
+    ("https://datacatalog.senate.go.th", "Thailand", "th"),
+    ("https://datagov.mot.go.th", "Thailand", "th"),
+    ("https://dataportal.opdc.go.th", "Thailand", "th"),
+    ("https://demo.gdcatalog.go.th", "Thailand", "th"),
+    ("https://gdcatalog.airports.go.th", "Thailand", "th"),
+    ("https://gdcatalog.dlt.go.th", "Thailand", "th"),
+    ("https://gdcatalog.go.th", "Thailand", "th"),
+    ("https://gdcatalog.m-culture.go.th", "Thailand", "th"),
+    ("https://hss.gdcatalog.go.th", "Thailand", "th"),
+    ("https://itd.gdcatalog.go.th", "Thailand", "th"),
+    ("https://lddcatalog.ldd.go.th", "Thailand", "th"),
+    ("https://nabc-catalog.oae.go.th", "Thailand", "th"),
+    ("https://ocpb.gdcatalog.go.th", "Thailand", "th"),
+    ("https://onab.gdcatalog.go.th", "Thailand", "th"),
+    ("https://onep.gdcatalog.go.th", "Thailand", "th"),
+    ("https://opendata.cifs.go.th", "Thailand", "th"),
+    ("https://opendata.dbd.go.th", "Thailand", "th"),
+    ("https://opendata.dla.go.th", "Thailand", "th"),
+    ("https://opendata.dmcr.go.th", "Thailand", "th"),
+    ("https://opendata.dpe.go.th", "Thailand", "th"),
+    ("https://opendata.dpo.go.th", "Thailand", "th"),
+    ("https://opendata.dsd.go.th", "Thailand", "th"),
+    ("https://opendata.led.go.th", "Thailand", "th"),
+    ("https://opendata.nesdc.go.th", "Thailand", "th"),
+    ("https://opendata.nrct.go.th", "Thailand", "th"),
+    ("https://opendata.oae.go.th", "Thailand", "th"),
+    ("https://opendata.obec.go.th", "Thailand", "th"),
+    ("https://opendata.ocsb.go.th", "Thailand", "th"),
+    ("https://opendata.onde.go.th", "Thailand", "th"),
+    ("https://opendata.onwr.go.th", "Thailand", "th"),
+    ("https://opendata.tisi.go.th", "Thailand", "th"),
+    ("https://otp.gdcatalog.go.th", "Thailand", "th"),
+    ("https://pcd.gdcatalog.go.th", "Thailand", "th"),
+    ("https://pei.dede.go.th", "Thailand", "th"),
+    ("https://phetchaburi.gdcatalog.go.th", "Thailand", "th"),
+    ("https://prd.gdcatalog.go.th", "Thailand", "th"),
+    ("https://roiet.gdcatalog.go.th", "Thailand", "th"),
+    ("https://catalog.industrie.gov.tn", "Tunisia", "tn"),
+    ("https://www.openculture.gov.tn", "Tunisia", "tn"),
+    ("https://data.ibb.gov.tr", "Turkey", "tr"),
+    ("https://ulasav.csb.gov.tr", "Turkey", "tr"),
+    ("https://bmckan.cpami.gov.tw", "Taiwan", "tw"),
+    ("https://data.cdc.gov.tw", "Taiwan", "tw"),
+    ("https://dani.kolrada.gov.ua", "Ukraine", "ua"),
+    ("https://data.dniprorada.gov.ua", "Ukraine", "ua"),
+    ("https://data.imr.gov.ua", "Ukraine", "ua"),
+    ("https://data.kr-rada.gov.ua", "Ukraine", "ua"),
+    ("https://data.lutskrada.gov.ua", "Ukraine", "ua"),
+    ("https://data.menarada.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.drohobych-rada.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.mlt.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.slavrada.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.slavuta-mvk.gov.ua", "Ukraine", "ua"),
+    ("https://opendata.ternopilcity.gov.ua", "Ukraine", "ua"),
+    ("https://open.data.gov.vn", "Vietnam", "vn"),
+    ("https://opendata.monre.gov.vn", "Vietnam", "vn"),
+    ("https://data.ocean.gov.za", "South Africa", "za"),
+    ("https://data.vulekamali.gov.za", "South Africa", "za"),
+    # -- widest-net sweep: remaining US gov CKAN (over-covered elsewhere; last) --
+    ("http://opendata.fortsmithar.gov", "United States", "us"),
+    ("https://catalog.data.faa.gov", "United States", "us"),
+    ("https://data.birminghamal.gov", "United States", "us"),
+    ("https://data.boston.gov", "United States", "us"),
+    ("https://data.ca.gov", "United States", "us"),
+    ("https://data.capitol.texas.gov", "United States", "us"),
+    ("https://data.chhs.ca.gov", "United States", "us"),
+    ("https://data.cnra.ca.gov", "United States", "us"),
+    ("https://data.doi.gov", "United States", "us"),
+    ("https://data.ed.gov", "United States", "us"),
+    ("https://data.houstontx.gov", "United States", "us"),
+    ("https://data.illinois.gov", "United States", "us"),
+    ("https://data.milwaukee.gov", "United States", "us"),
+    ("https://data.noaa.gov", "United States", "us"),
+    ("https://data.ok.gov", "United States", "us"),
+    ("https://data.pompanobeachfl.gov", "United States", "us"),
+    ("https://data.sanantonio.gov", "United States", "us"),
+    ("https://data.sanjoseca.gov/home", "United States", "us"),
+    ("https://data.santamonica.gov", "United States", "us"),
+    ("https://data.sba.gov", "United States", "us"),
+    ("https://data.sugarlandtx.gov", "United States", "us"),
+    ("https://data.tn.gov", "United States", "us"),
+    ("https://data.treasury.ri.gov", "United States", "us"),
+    ("https://datahub.cmap.illinois.gov", "United States", "us"),
+    ("https://edx.netl.doe.gov", "United States", "us"),
+    ("https://gisdata.mn.gov", "United States", "us"),
+    ("https://hub.mph.in.gov", "United States", "us"),
+    ("https://inventory.data.gov", "United States", "us"),
+    ("https://ndotdata.nebraska.gov", "United States", "us"),
+    ("https://open.jacksonms.gov", "United States", "us"),
+    ("https://opendata.hawaii.gov", "United States", "us"),
+    ("https://opendata.sbcountyatc.gov", "United States", "us"),
+    ("https://opendata.tampa.gov", "United States", "us"),
+    ("https://opendata.winchesterva.gov", "United States", "us"),
+    ("https://opendata.worcesterma.gov", "United States", "us"),
+    ("https://www.wvcheckbook.gov", "United States", "us"),
 ]
 _CKAN_TERMS = ["permis construction", "licencia construccion", "building permit",
                "permesso costruire", "pozwolenie budowe", "bouwvergunning",
-               "byggetillatelse", "baugenehmigung", "proyectos construccion"]
+               "byggetillatelse", "baugenehmigung", "proyectos construccion",
+               "development application", "planning application", "resource consent",
+               "environmental impact assessment", "licenciamento ambiental", "impacto ambiental",
+               "mining lease", "wind farm", "infrastructure project",
+               "izin lingkungan", "amdal", "izin mendirikan bangunan",
+               "\u0111\u00e1nh gi\u00e1 t\u00e1c \u0111\u1ed9ng m\u00f4i tr\u01b0\u1eddng",
+               "gi\u1ea5y ph\u00e9p x\u00e2y d\u1ef1ng", "\u5efa\u7bc9\u57f7\u7167",
+               "\u043e\u0446\u0456\u043d\u043a\u0430 \u0432\u043f\u043b\u0438\u0432\u0443",
+               "empreendimento", "obra publica", "concesion", "uvp", "amenagement"]
 _CKAN_TITLE_RE = re.compile(
     r"(permit|permis|licenc|licens|vergunning|genehmigung|pozwolen|costruire|"
-    r"bygge|bygglov|construc|construction|obra|edifica|planning|urban)", re.I)
+    r"bygge|bygglov|construc|construction|obra|edifica|planning|urban|"
+    # EIA / environment / development (matches the search vocabulary)
+    r"ambient|environment|impacto|impact|amenagement|am\u00e9nagement|desarrollo|"
+    r"empreendimento|proyecto|projeto|projet|infraestru|infrastru|mineria|miner\u00eda|"
+    r"mining|concesi|concess|chantier|lotissement|cantiere|edilizia|"
+    # Indonesian / Malay
+    r"izin|amdal|pembangunan|bangunan|tambang|lingkungan|"
+    # Vietnamese (accent-bearing substrings)
+    r"x\u00e2y d\u1ef1ng|m\u00f4i tr\u01b0\u1eddng|gi\u1ea5y ph\u00e9p|"
+    # Chinese (simplified + traditional)
+    r"\u5efa\u7b51|\u5efa\u7bc9|\u65bd\u5de5|\u74b0\u5883|\u73af\u5883|\u5f00\u53d1|\u958b\u767c|"
+    # Ukrainian / Russian
+    r"\u0431\u0443\u0434\u0456\u0432|\u0434\u043e\u0437\u0432\u0456\u043b|\u0434\u043e\u0432\u043a\u0456\u043b|"
+    r"\u0441\u0442\u0440\u043e\u0438\u0442|\u0440\u0430\u0437\u0440\u0435\u0448|"
+    # Thai
+    r"\u0e01\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07|\u0e2a\u0e34\u0e48\u0e07\u0e41\u0e27\u0e14\u0e25\u0e49\u0e2d\u0e21)", re.I)
 
-def fetch_ckan_federation(per_portal=3, per_ds=1500):
+# ============================ OpenDataSoft federation ============================
+# OpenDataSoft Explore API v2.1 (verified live against help.opendatasoft.com):
+#   catalog search : GET https://{host}/api/explore/v2.1/catalog/datasets?where=<odsql>&limit=
+#                    -> {"results":[{"dataset_id":..,"metas":{..}}]}  (some deployments: "datasets")
+#   records        : GET .../catalog/datasets/{id}/records?limit=  -> {"results":[{..fields..}]}
+# Public portals allow anonymous access (quota-limited). Heavy FR/EU/AU-council adoption.
+# Term-scoped like the CKAN federation; additionally drops clear terminal permit states.
+_ODS_PORTALS = [
+    ("data.ajman.ae", "United Arab Emirates", "ae"),
+    ("connectgh.com.au", "Australia", "au"),
+    ("data.ballarat.vic.gov.au", "Australia", "au"),
+    ("data.bmcc.nsw.gov.au", "Australia", "au"),
+    ("data.camden.nsw.gov.au", "Australia", "au"),
+    ("data.campbelltown.nsw.gov.au", "Australia", "au"),
+    ("data.casey.vic.gov.au", "Australia", "au"),
+    ("data.corangamite.vic.gov.au", "Australia", "au"),
+    ("data.cumberland.nsw.gov.au", "Australia", "au"),
+    ("data.fairfieldcity.nsw.gov.au", "Australia", "au"),
+    ("data.frankston.vic.gov.au", "Australia", "au"),
+    ("data.hawkesbury.nsw.gov.au", "Australia", "au"),
+    ("data.lakemac.com.au", "Australia", "au"),
+    ("data.liverpool.nsw.gov.au", "Australia", "au"),
+    ("data.maitland.nsw.gov.au", "Australia", "au"),
+    ("data.melbourne.vic.gov.au", "Australia", "au"),
+    ("data.penrith.city", "Australia", "au"),
+    ("data.randwick.nsw.gov.au", "Australia", "au"),
+    ("data.theparks.nsw.gov.au", "Australia", "au"),
+    ("data.wollondilly.nsw.gov.au", "Australia", "au"),
+    ("data.wpcouncils.nsw.gov.au", "Australia", "au"),
+    ("geelongdataexchange.com.au", "Australia", "au"),
+    ("mav-technology-geelongvic.opendatasoft.com", "Australia", "au"),
+    ("opendata-newcastlenswiar.opendatasoft.com", "Australia", "au"),
+    ("smart.darwin.nt.gov.au", "Australia", "au"),
+    ("ares-digitalwallonia.opendatasoft.com", "Belgium", "be"),
+    ("bruxellesdata.opendatasoft.com", "Belgium", "be"),
+    ("d4w-digitalwallonia.opendatasoft.com", "Belgium", "be"),
+    ("data.bep.be", "Belgium", "be"),
+    ("data.brugge.be", "Belgium", "be"),
+    ("data.namur.be", "Belgium", "be"),
+    ("data.stad.gent", "Belgium", "be"),
+    ("e-zybw.be", "Belgium", "be"),
+    ("odwb.be", "Belgium", "be"),
+    ("opendata.brussel.be", "Belgium", "be"),
+    ("opendata.brussels.be", "Belgium", "be"),
+    ("opendata.liege.be", "Belgium", "be"),
+    ("opendata.mons.be", "Belgium", "be"),
+    ("opendata.wse.vlaanderen.be", "Belgium", "be"),
+    ("prc-digitalwallonia.opendatasoft.com", "Belgium", "be"),
+    ("spi-digitalwallonia.opendatasoft.com", "Belgium", "be"),
+    ("tournai.opendatasoft.com", "Belgium", "be"),
+    ("data.gov.bh", "Bahrain", "bh"),
+    ("do101mtl.opendatasoft.com", "Canada", "ca"),
+    ("opendata.vancouver.ca", "Canada", "ca"),
+    ("opendatakingston.cityofkingston.ca", "Canada", "ca"),
+    ("opendatakingston.opendatasoft.com", "Canada", "ca"),
+    ("data.bl.ch", "Switzerland", "ch"),
+    ("data.bs.ch", "Switzerland", "ch"),
+    ("data.gr.ch", "Switzerland", "ch"),
+    ("data.sz.ch", "Switzerland", "ch"),
+    ("data.tg.ch", "Switzerland", "ch"),
+    ("daten.sg.ch", "Switzerland", "ch"),
+    ("daten.stadt.sg.ch", "Switzerland", "ch"),
+    ("opendata.fr.ch", "Switzerland", "ch"),
+    ("opendata.tpg.ch", "Switzerland", "ch"),
+    ("swisspost.opendatasoft.com", "Switzerland", "ch"),
+    ("bogota-laburbano.opendatasoft.com", "Colombia", "co"),
+    ("transport.opendatasoft.com", "Colombia", "co"),
+    ("mannheim.opendatasoft.com", "Germany", "de"),
+    ("open-data.dortmund.de", "Germany", "de"),
+    ("opendata.dormagen.de", "Germany", "de"),
+    ("opendata.potsdam.de", "Germany", "de"),
+    ("opendata.rhein-kreis-neuss.de", "Germany", "de"),
+    ("opendata.wuerzburg.de", "Germany", "de"),
+    ("analisis.datosabiertos.jcyl.es", "Spain", "es"),
+    ("angeles-navarro.opendatasoft.com", "Spain", "es"),
+    ("datosabiertos.dipcas.es", "Spain", "es"),
+    ("observa.gijon.es", "Spain", "es"),
+    ("opendata.clermontmetropole.eu", "Spain", "es"),
+    ("valencia.opendatasoft.com", "Spain", "es"),
+    ("achat-public.data.bretagne.bzh", "France", "fr"),
+    ("aix-en-provence.opendatasoft.com", "France", "fr"),
+    ("anglet-opendatapaysbasque.opendatasoft.com", "France", "fr"),
+    ("anruopendata.opendatasoft.com", "France", "fr"),
+    ("api-lannuaire.service-public.fr", "France", "fr"),
+    ("app.datajoule.fr", "France", "fr"),
+    ("ardennemetropole.opendatasoft.com", "France", "fr"),
+    ("auvergne-rhone-alpes-dataeducation.opendatasoft.com", "France", "fr"),
+    ("bayonne-opendatapaysbasque.opendatasoft.com", "France", "fr"),
+    ("boamp-datadila.opendatasoft.com", "France", "fr"),
+    ("boamp.fr", "France", "fr"),
+    ("bodacc.fr", "France", "fr"),
+    ("bondoufle-grandparissud.opendatasoft.com", "France", "fr"),
+    ("boulognebillancourt-seineouest.opendatasoft.com", "France", "fr"),
+    ("bpce.opendatasoft.com", "France", "fr"),
+    ("bretagne-dataeducation.opendatasoft.com", "France", "fr"),
+    ("cachan.opendatasoft.com", "France", "fr"),
+    ("cesson-grandparissud.opendatasoft.com", "France", "fr"),
+    ("chaville-seineouest.opendatasoft.com", "France", "fr"),
+    ("combslaville-grandparissud.opendatasoft.com", "France", "fr"),
+    ("corbeil-essonnes-grandparissud.opendatasoft.com", "France", "fr"),
+    ("dashboard.paris", "France", "fr"),
+    ("data.82amenagement.fr", "France", "fr"),
+    ("data.82numerique.fr", "France", "fr"),
+    ("data.ademe.fr", "France", "fr"),
+    ("data.agen.fr", "France", "fr"),
+    ("data.agglo-carene.fr", "France", "fr"),
+    ("data.agglo-montargoise.fr", "France", "fr"),
+    ("data.aide-developpement.gouv.fr", "France", "fr"),
+    ("data.ameli.fr", "France", "fr"),
+    ("data.ampmetropole.fr", "France", "fr"),
+    ("data.anfr.fr", "France", "fr"),
+    ("data.angers.fr", "France", "fr"),
+    ("data.blois.agglopolys.fr", "France", "fr"),
+    ("data.bourgesplus.fr", "France", "fr"),
+    ("data.bretagne.bzh", "France", "fr"),
+    ("data.cannes.com", "France", "fr"),
+    ("data.cannes.fr", "France", "fr"),
+    ("data.capatlantique.fr", "France", "fr"),
+    ("data.centrevaldeloire.fr", "France", "fr"),
+    ("data.chateauroux-metropole.fr", "France", "fr"),
+    ("data.cnav.fr", "France", "fr"),
+    ("data.combs-la-ville.fr", "France", "fr"),
+    ("data.corsica", "France", "fr"),
+    ("data.coudray-montceaux.fr", "France", "fr"),
+    ("data.culture.gouv.fr", "France", "fr"),
+    ("data.culturecommunication.gouv.fr", "France", "fr"),
+    ("data.departement41.fr", "France", "fr"),
+    ("data.drees.solidarites-sante.gouv.fr", "France", "fr"),
+    ("data.dunkerque-agglo.fr", "France", "fr"),
+    ("data.economie.gouv.fr", "France", "fr"),
+    ("data.education.gouv.fr", "France", "fr"),
+    ("data.enseignementsup-recherche.gouv.fr", "France", "fr"),
+    ("data.etiolles.fr", "France", "fr"),
+    ("data.eurelien.fr", "France", "fr"),
+    ("data.evrycourcouronnes.fr", "France", "fr"),
+    ("data.fleurysurorne.fr", "France", "fr"),
+    ("data.gers.fr", "France", "fr"),
+    ("data.gouv.nc", "France", "fr"),
+    ("data.grandchambord.fr", "France", "fr"),
+    ("data.grandparisgrandest.fr", "France", "fr"),
+    ("data.grandparissud.fr", "France", "fr"),
+    ("data.grandpoitiers.fr", "France", "fr"),
+    ("data.grandsoissons.com", "France", "fr"),
+    ("data.grigny91.fr", "France", "fr"),
+    ("data.haute-garonne.fr", "France", "fr"),
+    ("data.hauts-de-france.education.gouv.fr", "France", "fr"),
+    ("data.idelis.fr", "France", "fr"),
+    ("data.iledefrance-mobilites.fr", "France", "fr"),
+    ("data.iledefrance.fr", "France", "fr"),
+    ("data.issy.com", "France", "fr"),
+    ("data.lafibre64.fr", "France", "fr"),
+    ("data.lamayenne.fr", "France", "fr"),
+    ("data.laregion.fr", "France", "fr"),
+    ("data.larochesuryon.fr", "France", "fr"),
+    ("data.le64.fr", "France", "fr"),
+    ("data.loire-atlantique.fr", "France", "fr"),
+    ("data.maine-et-loire.fr", "France", "fr"),
+    ("data.mairie-ris-orangis.fr", "France", "fr"),
+    ("data.maugescommunaute.fr", "France", "fr"),
+    ("data.metropole-rouen-normandie.fr", "France", "fr"),
+    ("data.metropoletpm.fr", "France", "fr"),
+    ("data.meudon.fr", "France", "fr"),
+    ("data.moissy-cramayel.fr", "France", "fr"),
+    ("data.montreuil.fr", "France", "fr"),
+    ("data.mulhouse-alsace.fr", "France", "fr"),
+    ("data.nantesmetropole.fr", "France", "fr"),
+    ("data.nimes-metropole.fr", "France", "fr"),
+    ("data.normandie.education.gouv.fr", "France", "fr"),
+    ("data.occitanie.education.gouv.fr", "France", "fr"),
+    ("data.ofgl.fr", "France", "fr"),
+    ("data.orleans-metropole.fr", "France", "fr"),
+    ("data.osmontrouge.fr", "France", "fr"),
+    ("data.paysdelaloire.fr", "France", "fr"),
+    ("data.ratp.fr", "France", "fr"),
+    ("data.regionreunion.com", "France", "fr"),
+    ("data.rennesmetropole.fr", "France", "fr"),
+    ("data.saint-maur.com", "France", "fr"),
+    ("data.saint-pierre-du-perray.fr", "France", "fr"),
+    ("data.saintnazaireagglo.fr", "France", "fr"),
+    ("data.saintry-sur-seine.fr", "France", "fr"),
+    ("data.sarthe.fr", "France", "fr"),
+    ("data.savigny-le-temple.fr", "France", "fr"),
+    ("data.seineouest.fr", "France", "fr"),
+    ("data.sevres.fr", "France", "fr"),
+    ("data.sicoval.fr", "France", "fr"),
+    ("data.smartidf.services", "France", "fr"),
+    ("data.stmalo-agglomeration.fr", "France", "fr"),
+    ("data.tco.re", "France", "fr"),
+    ("data.teo-paysdelaloire.fr", "France", "fr"),
+    ("data.toulouse-metropole.fr", "France", "fr"),
+    ("data.tours-metropole.fr", "France", "fr"),
+    ("data.twisto.fr", "France", "fr"),
+    ("data.unedic.org", "France", "fr"),
+    ("data.val2c.fr", "France", "fr"),
+    ("data.valdeloirenumerique.fr", "France", "fr"),
+    ("data.vendee.fr", "France", "fr"),
+    ("data.vert-saint-denis.fr", "France", "fr"),
+    ("data.ville-bondoufle.fr", "France", "fr"),
+    ("data.ville-cesson.fr", "France", "fr"),
+    ("data.ville-lieusaint.fr", "France", "fr"),
+    ("data.ville-soissons.fr", "France", "fr"),
+    ("data.villedavray.fr", "France", "fr"),
+    ("data.vincennes.fr", "France", "fr"),
+    ("dataratp.opendatasoft.com", "France", "fr"),
+    ("dataratp2.opendatasoft.com", "France", "fr"),
+    ("datavaccin-covid.ameli.fr", "France", "fr"),
+    ("dataviz-haute-garonne.opendatasoft.com", "France", "fr"),
+    ("dgal.opendatasoft.com", "France", "fr"),
+    ("dgefp.opendatasoft.com", "France", "fr"),
+    ("donnees.grandchambery.fr", "France", "fr"),
+    ("e-agre.opendatasoft.com", "France", "fr"),
+    ("enseignement-agricole.opendatasoft.com", "France", "fr"),
+    ("epn-agglo.opendatasoft.com", "France", "fr"),
+    ("equipements.sports.gouv.fr", "France", "fr"),
+    ("etiolles-grandparissud.opendatasoft.com", "France", "fr"),
+    ("evrycourcouronnes-grandparissud.opendatasoft.com", "France", "fr"),
+    ("fos-sur-mer.opendatasoft.com", "France", "fr"),
+    ("future4care.opendatasoft.com", "France", "fr"),
+    ("geocatalogue.lorient-agglo.bzh", "France", "fr"),
+    ("gpseo.opendatasoft.com", "France", "fr"),
+    ("grand-est-dataeducation.opendatasoft.com", "France", "fr"),
+    ("hasparren-opendatapaysbasque.opendatasoft.com", "France", "fr"),
+    ("hautespyrenees.opendatasoft.com", "France", "fr"),
+    ("herault-data.eu", "France", "fr"),
+    ("herault-data.fr", "France", "fr"),
+    ("info-financiere.fr", "France", "fr"),
+    ("journal-officiel.gouv.fr", "France", "fr"),
+    ("karudata.com", "France", "fr"),
+    ("lafibre64-data64.opendatasoft.com", "France", "fr"),
+    ("lieusaint-grandparissud.opendatasoft.com", "France", "fr"),
+    ("lisses-grandparissud.opendatasoft.com", "France", "fr"),
+    ("mairie-bastia-datacorsica.opendatasoft.com", "France", "fr"),
+    ("meudon-seineouest.opendatasoft.com", "France", "fr"),
+    ("nandy-grandparissud.opendatasoft.com", "France", "fr"),
+    ("observatoire-climat.toulouse-metropole.fr", "France", "fr"),
+    ("observatoire.odds93.fr", "France", "fr"),
+    ("oddc-datacorsica.opendatasoft.com", "France", "fr"),
+    ("odisse.santepubliquefrance.fr", "France", "fr"),
+    ("open.urssaf.fr", "France", "fr"),
+    ("opendata-paysbasque.fr", "France", "fr"),
+    ("opendata.afd.fr", "France", "fr"),
+    ("opendata.aude.fr", "France", "fr"),
+    ("opendata.aveyron.fr", "France", "fr"),
+    ("opendata.bordeaux-metropole.fr", "France", "fr"),
+    ("opendata.brest-metropole.fr", "France", "fr"),
+    ("opendata.caissedesdepots.fr", "France", "fr"),
+    ("opendata.cangt.fr", "France", "fr"),
+    ("opendata.cc-lacqorthez.fr", "France", "fr"),
+    ("opendata.clermont-ferrand.fr", "France", "fr"),
+    ("opendata.doubs.fr", "France", "fr"),
+    ("opendata.finistere.fr", "France", "fr"),
+    ("opendata.ha-py.fr", "France", "fr"),
+    ("opendata.hauts-de-seine.fr", "France", "fr"),
+    ("opendata.iledefrance.fr", "France", "fr"),
+    ("opendata.isere.fr", "France", "fr"),
+    ("opendata.lillemetropole.fr", "France", "fr"),
+    ("opendata.paris.fr", "France", "fr"),
+    ("opendata.paris.fr.opendatasoft.com", "France", "fr"),
+    ("opendata.pau.fr", "France", "fr"),
+    ("opendata.plus.transformation.gouv.fr", "France", "fr"),
+    ("opendata.roubaix.fr", "France", "fr"),
+    ("opendata.roumoiseine.fr", "France", "fr"),
+    ("opendata.sqy.fr", "France", "fr"),
+    ("opendata.stif.info", "France", "fr"),
+    ("opendata.strasbourg.eu", "France", "fr"),
+    ("opendata.tourcoing.fr", "France", "fr"),
+    ("opendata.vert-saint-denis.fr", "France", "fr"),
+    ("opendata56.fr", "France", "fr"),
+    ("parisdata.opendatasoft.com", "France", "fr"),
+    ("porto-vecchio.opendatasoft.com", "France", "fr"),
+    ("projets-environnement.gouv.fr", "France", "fr"),
+    ("rec-stif.opendatasoft.com", "France", "fr"),
+    ("regionguadeloupe.opendatasoft.com", "France", "fr"),
+    ("risorangis-grandparissud.opendatasoft.com", "France", "fr"),
+    ("saint-jean-de-luz-opendatapaysbasque.opendatasoft.com", "France", "fr"),
+    ("saint-louis-agglo.opendatasoft.com", "France", "fr"),
+    ("saintgermainlescorbeil-grandparissud.opendatasoft.com", "France", "fr"),
+    ("saintmande.opendatasoft.com", "France", "fr"),
+    ("savignyletemple-grandparissud.opendatasoft.com", "France", "fr"),
+    ("sevres-seineouest.opendatasoft.com", "France", "fr"),
+    ("sports-sgsocialgouv.opendatasoft.com", "France", "fr"),
+    ("stpdp-grandparissud.opendatasoft.com", "France", "fr"),
+    ("tourisme62.opendatasoft.com", "France", "fr"),
+    ("transparence.sante.gouv.fr", "France", "fr"),
+    ("twisto.opendatasoft.com", "France", "fr"),
+    ("valenciennesmetro.opendatasoft.com", "France", "fr"),
+    ("vanves-seineouest.opendatasoft.com", "France", "fr"),
+    ("villedavray-seineouest.opendatasoft.com", "France", "fr"),
+    ("visualisation.dila.fr", "France", "fr"),
+    ("zabal-agriculture.opendata-paysbasque.fr", "France", "fr"),
+    ("data.leicester.gov.uk", "United Kingdom", "gb"),
+    ("nihr.opendatasoft.com", "United Kingdom", "gb"),
+    ("ukpowernetworks.opendatasoft.com", "United Kingdom", "gb"),
+    ("opendata.comune.bologna.it", "Italy", "it"),
+    ("cdmx.opendatasoft.com", "Mexico", "mx"),
+    ("inai.opendatasoft.com", "Mexico", "mx"),
+    ("nuevoleon.opendatasoft.com", "Mexico", "mx"),
+    ("maps.opendata.opt.nc", "New Caledonia", "nc"),
+    ("data.eindhoven.nl", "Netherlands", "nl"),
+    ("transparencia.sns.gov.pt", "Portugal", "pt"),
+    ("data.gov.qa", "Qatar", "qa"),
+    ("zastrugis.my.opendatasoft.com", "Serbia", "rs"),
+    ("helsingborg.opendatasoft.com", "Sweden", "se"),
+    ("opendata.umea.se", "Sweden", "se"),
+    ("cityofsalinas.opendatasoft.com", "United States", "us"),
+    ("codeforraleigh.opendatasoft.com", "United States", "us"),
+    ("data.carync.gov", "United States", "us"),
+    ("data.jerseycitynj.gov", "United States", "us"),
+    ("data.longbeach.gov", "United States", "us"),
+    ("data.nccourts.gov", "United States", "us"),
+    ("data.townofcary.org", "United States", "us"),
+    ("demography.osbm.nc.gov", "United States", "us"),
+    ("linc.osbm.nc.gov", "United States", "us"),
+    ("opendata.morrisvillenc.gov", "United States", "us"),
+    ("opendata.townofmorrisville.org", "United States", "us"),
+    ("geocatalogue.smavd.org", "World", "world"),
+]
+_ODS_TERMS = ["permis de construire", "autorisation d'urbanisme", "am\u00e9nagement",
+              "installations class\u00e9es", "urbanisme", "chantier",
+              "building permit", "development application", "planning application",
+              "licencia urbanistica", "licenciamento", "construction",
+              "bouwvergunning", "omgevingsvergunning",
+              "baugenehmigung", "bauprojekt",
+              "permesso di costruire", "cantiere",
+              "enqu\u00eate publique", "lotissement"]
+# terminal states to exclude (multilingual, substring, accent/underscore-normalised)
+_ODS_DEAD = ("refus", "reject", "rechaz", "annul", "cancel", "retir", "withdraw",
+             "expir", "caduc", "perim", "abandon", "desist", "archiv", "indefer",
+             "lapsed", "void", "vencido",
+             # built / no-longer-in-process states (in-process gate):
+             "operat", "production", "dismantl", "decommission", "completed",
+             "terminad", "concluid", "en service", "in betrieb")
+_ODS_NAMEK = ("nom", "name", "title", "titre", "libelle", "libell\u00e9", "intitule",
+              "intitul\u00e9", "denomination", "d\u00e9nomination", "projet", "project",
+              "operation", "op\u00e9ration", "objet", "adresse", "address", "designation",
+              "nombre", "nome", "titulo", "t\u00edtulo", "denominacion", "denominaci\u00f3n",
+              "proyecto", "projeto", "nama", "naam", "bezeichnung", "titel", "ten", "t\u00ean")
+_ODS_STATUSK = ("statut", "status", "etat", "\u00e9tat", "phase", "etape", "\u00e9tape",
+                "avancement", "estado", "situacao", "situa\u00e7\u00e3o", "state",
+                "situacion", "situaci\u00f3n", "estatus", "zustand", "fase",
+                "trang thai", "tr\u1ea1ng th\u00e1i", "keterangan")
+_ODS_GEOK = ("geo_point_2d", "geopoint", "geo_point", "point_geo", "coordonnees",
+             "coordonn\u00e9es", "latlng", "lat_lng", "location", "geolocalisation",
+             "geo_shape", "geometry", "wkb_geometry", "the_geom",
+             "coordenadas", "ubicacion", "ubicaci\u00f3n", "localizacao",
+             "localiza\u00e7\u00e3o", "koordinat", "geolocation", "geom")
+
+def _ods_latlng(rec):
+    # 1) explicit geo fields
+    for k, v in rec.items():
+        if k.lower() not in _ODS_GEOK or v in (None, "", []):
+            continue
+        if isinstance(v, dict):
+            if "coordinates" in v:                       # geo_shape / geometry
+                c = _geom_center(v)
+                if c: return c
+            la = v.get("lat") or v.get("latitude") or v.get("y")
+            lo = v.get("lon") or v.get("lng") or v.get("longitude") or v.get("x")
+            la, lo = _num(la), _num(lo)
+            if la is not None and lo is not None: return (la, lo)
+        elif isinstance(v, (list, tuple)) and len(v) == 2:
+            a, b = _num(v[0]), _num(v[1])                # ODS geo_point_2d list = [lat, lon]
+            if a is not None and b is not None:
+                return (a, b) if abs(a) <= 90 else (b, a)
+        elif isinstance(v, str) and "," in v:
+            parts = v.split(",")
+            if len(parts) == 2:
+                a, b = _num(parts[0]), _num(parts[1])
+                if a is not None and b is not None:
+                    return (a, b) if abs(a) <= 90 else (b, a)
+    # 2) separate latitude / longitude columns
+    la = lo = None
+    for k, v in rec.items():
+        kl = k.lower()
+        if la is None and kl in ("lat", "latitude", "y_lat", "ycoord", "y",
+                                 "latitud", "latitude_dd", "lat_dd", "lintang"): la = _num(v)
+        if lo is None and kl in ("lon", "lng", "longitude", "x_lon", "xcoord", "x",
+                                 "longitud", "longitude_dd", "lon_dd", "bujur"): lo = _num(v)
+    if la is not None and lo is not None: return (la, lo)
+    return None
+
+def _ods_pick(rec, keys):
+    for k, v in rec.items():
+        if k.lower() in keys and isinstance(v, (str, int, float)) and str(v).strip():
+            return str(v)
+    return ""
+
+def fetch_ods_federation(per_portal=None, per_ds=800):
+    per_portal = per_portal or (10 if os.environ.get("HARVEST_FEDERATIONS") == "1" else 6)
     out = []
-    for (base, country, cc) in _CKAN_PORTALS:
+    budget_min = _fed_budget("ODS_BUDGET_MIN", 35, 45)
+    t_end = time.time() + budget_min * 60
+    _ods_portals = _shard_list(_ODS_PORTALS)
+    for (host, country, cc) in _ods_portals:
+        if time.time() > t_end:
+            _flag("ods federation hit %d-min budget -- %d portals not reached" %
+                  (budget_min, len(_ods_portals) - _ods_portals.index((host, country, cc))))
+            break
+        base = "https://%s/api/explore/v2.1/catalog/datasets" % host
+        dsids = []; seen = set()
+        for term in _ODS_TERMS:
+            try:
+                u = base + "?" + urllib.parse.urlencode(
+                    {"where": 'search("%s")' % term.replace('"', ""), "limit": 20})
+                d = _get_json(u)
+            except Exception:
+                continue
+            for it in ((d or {}).get("results") or (d or {}).get("datasets") or []):
+                did = it.get("dataset_id") or (it.get("dataset") or {}).get("dataset_id")
+                if did and did not in seen:
+                    seen.add(did); dsids.append(did)
+            time.sleep(0.25)
+            if len(dsids) >= per_portal: break
+        got = 0
+        for did in dsids[:per_portal]:
+            recs = []
+            for off in range(0, per_ds, 100):        # ODS caps limit at 100 -> offset-page
+                try:
+                    ru = ("https://%s/api/explore/v2.1/catalog/datasets/%s/records?limit=100&offset=%d"
+                          % (host, did, off))
+                    rd = _get_json(ru)
+                except Exception:
+                    break
+                batch = (rd or {}).get("results") or []
+                recs.extend(batch)
+                if len(batch) < 100: break
+                time.sleep(0.15)
+            n0 = len(out)
+            for r in recs[:per_ds]:
+                try:
+                    rec = r.get("fields") if isinstance(r.get("fields"), dict) else r
+                    ll = _ods_latlng(rec)
+                    if not ll: continue
+                    st = _ods_pick(rec, _ODS_STATUSK)
+                    sn = str(st or "").lower().replace("_", " ")
+                    if any(k in sn for k in _ODS_DEAD): continue      # drop terminal states
+                    nm = _ods_pick(rec, _ODS_NAMEK) or did.replace("-", " ")
+                    p = {"name": nm[:140], "type": "Permit / development (%s)" % country,
+                         "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                         "precise": True, "size": "", "status": st[:40], "company": "",
+                         "url": "https://%s" % host,
+                         "desc": "From %s open data (OpenDataSoft) \u00b7 %s." % (country, did[:60]),
+                         "source": "ods_%s" % cc}
+                    p["impact"] = rate_project(p, sensitivity=0)
+                    out.append(p)
+                except Exception:
+                    continue
+            if len(out) > n0:
+                got += 1
+                print("  ods %s: +%d from '%s'" % (country, len(out) - n0, did[:40]))
+            time.sleep(0.25)
+    print("  ods federation: %d points from %d portals" % (len(out), len(_ODS_PORTALS)))
+    return out
+
+
+# ============================== GeoNode federation ==============================
+# GeoNode REST API v2 (verified against docs.geonode.org):
+#   resource search : GET https://{host}/api/v2/resources/?filter{title.icontains}=<term>&page_size=
+#                     -> {"resources":[{"alternate":"ws:layer","subtype":"vector","links":[...]}]}
+#   each vector layer's features via its OGC:WFS link (resource.links[] link_type OGC:WFS),
+#   fallback https://{host}/geoserver/wfs -> WFS GetFeature outputFormat=application/json (GeoJSON).
+# Title-scoped to development/land-use vocabulary; terminal states dropped (shared _ODS_DEAD).
+# Coarser scope than permit feeds (some layers are full inventories) -> FIRST-RUN REVIEW.
+_GEONODE_PORTALS = [
+    ("lrimsfaoaf.ait.ac.th", "Afghanistan", "af"),
+    ("nafcoast.org", "Africa", "africa"),
+    ("climateriskmap.environment.gov.ag", "Antigua and Barbuda", "ag"),
+    ("nri.environment.gov.ag", "Antigua and Barbuda", "ag"),
+    ("coronelsuarezgis.gob.ar", "Argentina", "ar"),
+    ("datos.inidep.edu.ar", "Argentina", "ar"),
+    ("dipec.jujuy.gob.ar", "Argentina", "ar"),
+    ("estadisticasig.rionegro.gov.ar", "Argentina", "ar"),
+    ("geo.gualeguaychu.gov.ar", "Argentina", "ar"),
+    ("geonode.minfra.gba.gob.ar", "Argentina", "ar"),
+    ("geonode.pergamino.gob.ar", "Argentina", "ar"),
+    ("geonode.senasa.gob.ar", "Argentina", "ar"),
+    ("geoportal.cfi.org.ar", "Argentina", "ar"),
+    ("geoportal.idesa.gob.ar", "Argentina", "ar"),
+    ("geoportal.lujandecuyo.gob.ar", "Argentina", "ar"),
+    ("geoportal.obraspublicas.gob.ar", "Argentina", "ar"),
+    ("geoportal.salta.gob.ar", "Argentina", "ar"),
+    ("geoportal.tresdefebrero.gob.ar", "Argentina", "ar"),
+    ("geoportalqa.lujandecuyo.gob.ar", "Argentina", "ar"),
+    ("ide-enacom.arsat.com.ar", "Argentina", "ar"),
+    ("ide.correoargentino.com.ar", "Argentina", "ar"),
+    ("ide.godoycruz.gob.ar", "Argentina", "ar"),
+    ("ide.santarosamendoza.gob.ar", "Argentina", "ar"),
+    ("idecapital.cc.gob.ar", "Argentina", "ar"),
+    ("manejodelfuego.conae.gov.ar", "Argentina", "ar"),
+    ("mapas.geomatica.idr.org.ar", "Argentina", "ar"),
+    ("mapas.sancarlos.gob.ar", "Argentina", "ar"),
+    ("municipiosig.rionegro.gov.ar", "Argentina", "ar"),
+    ("nodo.cfi.org.ar", "Argentina", "ar"),
+    ("oat.ambiente.gob.ar", "Argentina", "ar"),
+    ("poblacion.idear.gov.ar", "Argentina", "ar"),
+    ("saludsig.rionegro.gov.ar", "Argentina", "ar"),
+    ("sigvial.dpvmisiones.gob.ar", "Argentina", "ar"),
+    ("geonode.lebensraumvernetzung.at", "Austria", "at"),
+    ("maps.oraotca.org", "Australia", "au"),
+    ("geodash.gov.bd", "Bangladesh", "bd"),
+    ("geoportal.bforest.gov.bd", "Bangladesh", "bd"),
+    ("gis.nesco.gov.bd", "Bangladesh", "bd"),
+    ("nsdi.gov.bd", "Bangladesh", "bd"),
+    ("geoportail.bumigeb.bf", "Burkina Faso", "bf"),
+    ("46.165.252.159", "Bulgaria", "bg"),
+    ("84.16.227.175", "Bulgaria", "bg"),
+    ("georisk.gouv.bj", "Benin", "bj"),
+    ("sig.sineb.bj", "Benin", "bj"),
+    ("aetn.geo.gob.bo", "Bolivia", "bo"),
+    ("dgf.geo.gob.bo", "Bolivia", "bo"),
+    ("geo03.siarh.gob.bo", "Bolivia", "bo"),
+    ("geoconcurso.geo.gob.bo", "Bolivia", "bo"),
+    ("geonode.fonadin.gob.bo", "Bolivia", "bo"),
+    ("geoportal.mhe.gob.bo", "Bolivia", "bo"),
+    ("ide.lapaz.bo", "Bolivia", "bo"),
+    ("ipdsa.geo.gob.bo", "Bolivia", "bo"),
+    ("sigvmeea.hidrocarburos.gob.bo", "Bolivia", "bo"),
+    ("arvorezinha.geomunicipios.com", "Brazil", "br"),
+    ("catalogo.ipe.df.gov.br", "Brazil", "br"),
+    ("dados.it-amazonia.dev", "Brazil", "br"),
+    ("geodados.daee.sp.gov.br", "Brazil", "br"),
+    ("geonode.paranagua.pr.gov.br", "Brazil", "br"),
+    ("geoportal-spunet.gestao.gov.br", "Brazil", "br"),
+    ("imde.portoalegre.rs.gov.br", "Brazil", "br"),
+    ("inderh.snirh.gov.br", "Brazil", "br"),
+    ("sig.amvali.org.br", "Brazil", "br"),
+    ("siga.meioambiente.go.gov.br", "Brazil", "br"),
+    ("sigahomol.meioambiente.go.gov.br", "Brazil", "br"),
+    ("cgi-gn.nlcs.gov.bt", "Bhutan", "bt"),
+    ("sdss.dofps.gov.bt", "Bhutan", "bt"),
+    ("geo.lachute.ca", "Canada", "ca"),
+    ("geonode.doigriverfn.com", "Canada", "ca"),
+    ("anidlimarichoapa.ciren.cl", "Chile", "cl"),
+    ("apibotanico.ciren.cl", "Chile", "cl"),
+    ("geonode.meteochile.gob.cl", "Chile", "cl"),
+    ("ide.emprendequillota.cl", "Chile", "cl"),
+    ("geo.snh.cm", "Cameroon", "cm"),
+    ("catastro.munisc.go.cr", "Costa Rica", "cr"),
+    ("geonode.bgeoinorca.com", "Costa Rica", "cr"),
+    ("geoportal-saracc.cne.go.cr", "Costa Rica", "cr"),
+    ("gestorgeo.inec.go.cr", "Costa Rica", "cr"),
+    ("ide.santaana.go.cr", "Costa Rica", "cr"),
+    ("ideonion.go.cr", "Costa Rica", "cr"),
+    ("idesca.munisc.go.cr", "Costa Rica", "cr"),
+    ("raster.munisc.go.cr", "Costa Rica", "cr"),
+    ("sae.inec.go.cr", "Costa Rica", "cr"),
+    ("idema.geotech.cu", "Cuba", "cu"),
+    ("185.17.146.157", "Germany", "de"),
+    ("bish-staging.aconium.eu", "Germany", "de"),
+    ("breitband-in-sh.de", "Germany", "de"),
+    ("geo-katalog.julius-kuehn.de", "Germany", "de"),
+    ("geoportal.giz.de", "Germany", "de"),
+    ("giz.sta.hz.kartoza.com", "Germany", "de"),
+    ("milton-geo.thw-fts.org", "Germany", "de"),
+    ("waldgeoportal.de", "Germany", "de"),
+    ("dominode.dm", "Dominica", "dm"),
+    ("cartografia.ayuntamientosantiago.gob.do", "Republica Dominicana", "do"),
+    ("geoportal.catastro.gob.do", "Republica Dominicana", "do"),
+    ("geoportal.iderd.gob.do", "Republica Dominicana", "do"),
+    ("geoportal.pedepe.org", "Republica Dominicana", "do"),
+    ("nodosini.ministeriodeeducacion.gob.do", "Republica Dominicana", "do"),
+    ("plataforma.sini.gob.do", "Republica Dominicana", "do"),
+    ("geonode.inec.gob.ec", "Ecuador", "ec"),
+    ("geoportal.ame.gob.ec", "Ecuador", "ec"),
+    ("geoservicios.inamhi.gob.ec", "Ecuador", "ec"),
+    ("geovisor.manabi.gob.ec", "Ecuador", "ec"),
+    ("movimientosenmasadmq.geoenergia.gob.ec", "Ecuador", "ec"),
+    ("data.transportforcairo.com", "Egypt", "eg"),
+    ("datosmarinos.cedex.es", "Spain", "es"),
+    ("geonode.arxiuhistoricpoblenou.cat", "Spain", "es"),
+    ("geoportal-lavalldegallinera.geoinnova.es", "Spain", "es"),
+    ("pmpc-arandadeduero.geoinnova.es", "Spain", "es"),
+    ("ethionsdi.gov.et", "Ethiopia", "et"),
+    ("geo.portal.ebi.gov.et", "Ethiopia", "et"),
+    ("geonode.portal.ebi.gov.et", "Ethiopia", "et"),
+    ("lbdcdirectory.gov.et", "Ethiopia", "et"),
+    ("lsc-hub.eiar.gov.et", "Ethiopia", "et"),
+    ("nsis.moa.gov.et", "Ethiopia", "et"),
+    ("qfield.cloud.ebi.gov.et", "Ethiopia", "et"),
+    ("iws.seastorms.eu", "European Union", "eu"),
+    ("portodimare.eu", "European Union", "eu"),
+    ("jyvaskyla.infraweb.fi", "Finland", "fi"),
+    ("data.sigea.educagri.fr", "France", "fr"),
+    ("geonode.recette.oieau.fr", "France", "fr"),
+    ("qualif.data.sigea.educagri.fr", "France", "fr"),
+    ("datamap.gov.wales", "United Kingdom", "gb"),
+    ("ghanageoportal.com", "Ghana", "gh"),
+    ("maps.ghanaein.net", "Ghana", "gh"),
+    ("3.23.95.209", "Gambia", "gm"),
+    ("beta.gis.cityofathens.gr", "Greece", "gr"),
+    ("geoportal.ermis-f.eu", "Greece", "gr"),
+    ("gis.cityofathens.gr", "Greece", "gr"),
+    ("maps.msp-greece.eu", "Greece", "gr"),
+    ("mapsportal.ypen.gr", "Greece", "gr"),
+    ("riskdata.thessaloniki.gr", "Greece", "gr"),
+    ("thalchor-2.ypen.gov.gr", "Greece", "gr"),
+    ("ypendev2.cfserver3.net", "Greece", "gr"),
+    ("geonode4.ine.gob.gt", "Guatemala", "gt"),
+    ("geoportal.gov.gy", "Guyana", "gy"),
+    ("mapas.simet.amdc.hn", "Honduras", "hn"),
+    ("mapassimpro.copeco.gob.hn", "Honduras", "hn"),
+    ("haitidata.org", "Haiti", "ht"),
+    ("atlas.atrbpn.go.id", "Indonesia", "id"),
+    ("fp2.menlhk.go.id", "Indonesia", "id"),
+    ("geodata.bandung.go.id", "Indonesia", "id"),
+    ("geonode.folunc-id.org", "Indonesia", "id"),
+    ("geonode.nodc.id", "Indonesia", "id"),
+    ("geoportal.asahankab.go.id", "Indonesia", "id"),
+    ("geoportal.bantulkab.go.id", "Indonesia", "id"),
+    ("geoportal.beraukab.go.id", "Indonesia", "id"),
+    ("geoportal.bukittinggikota.go.id", "Indonesia", "id"),
+    ("geoportal.bulukumbakab.go.id", "Indonesia", "id"),
+    ("geoportal.deliserdangkab.go.id", "Indonesia", "id"),
+    ("geoportal.jogjaprov.go.id", "Indonesia", "id"),
+    ("geoportal.kolakakab.go.id", "Indonesia", "id"),
+    ("geoportal.kolakatimurkab.go.id", "Indonesia", "id"),
+    ("geoportal.kominfo.go.id", "Indonesia", "id"),
+    ("geoportal.kuburayakab.go.id", "Indonesia", "id"),
+    ("geoportal.kulonprogokab.go.id", "Indonesia", "id"),
+    ("geoportal.langkatkab.go.id", "Indonesia", "id"),
+    ("geoportal.magelangkab.go.id", "Indonesia", "id"),
+    ("geoportal.magelangkota.go.id", "Indonesia", "id"),
+    ("geoportal.manadokota.go.id", "Indonesia", "id"),
+    ("geoportal.sanggau.go.id", "Indonesia", "id"),
+    ("geoportal.slemankab.go.id", "Indonesia", "id"),
+    ("geoportal.sultengprov.go.id", "Indonesia", "id"),
+    ("geoportal.sumbarprov.go.id", "Indonesia", "id"),
+    ("jigd.kaltimprov.go.id", "Indonesia", "id"),
+    ("pisda.sukoharjokab.go.id", "Indonesia", "id"),
+    ("portal.sitarung.win", "Indonesia", "id"),
+    ("simtaru.papua.go.id", "Indonesia", "id"),
+    ("smartgis.dishut.kaltaraprov.go.id", "Indonesia", "id"),
+    ("opensdi.kerala.gov.in", "India", "in"),
+    ("sdi.kmporg.ir", "Iran", "ir"),
+    ("atlad.geoportale.it", "Italy", "it"),
+    ("atlantedellalaguna.it", "Italy", "it"),
+    ("catalog.geourba.it", "Italy", "it"),
+    ("cigno.atlantedellalaguna.it", "Italy", "it"),
+    ("decimetro.cittametropolitana.mi.it", "Italy", "it"),
+    ("geomap.arpa.veneto.it", "Italy", "it"),
+    ("geonode.nnb.isprambiente.it", "Italy", "it"),
+    ("geonode.provincia.treviso.it", "Italy", "it"),
+    ("geonode.supportopcveneto.it", "Italy", "it"),
+    ("geoportale.regione.lazio.it", "Italy", "it"),
+    ("geosdi.geodatalab.cloud", "Italy", "it"),
+    ("mappe.provincia.teramo.it", "Italy", "it"),
+    ("reportdu.nnb.isprambiente.it", "Italy", "it"),
+    ("portal.msp.go.ke", "Kenya", "ke"),
+    ("geonode.water.gov.kg", "Kyrgyzstan", "kg"),
+    ("cmhl.peoplecenter.gov.kh", "Cambodia", "kh"),
+    ("map.gov.kz", "Kazakhstan", "kz"),
+    ("virgo.mpwt.gov.la", "Laos", "la"),
+    ("mebin.nara.ac.lk", "Sri Lanka", "lk"),
+    ("riverbasins.irrigation.gov.lk", "Sri Lanka", "lk"),
+    ("onlinegis.cedis.me", "Montenegro", "me"),
+    ("razvojgis.cedis.me", "Montenegro", "me"),
+    ("resiliencemada.gov.mg", "Madagascar", "mg"),
+    ("eic.mn", "Mongolia", "mn"),
+    ("pfni-ce.mr", "Mauritania", "mr"),
+    ("geoportal.govmu.org", "Mauritius", "mu"),
+    ("masdap.mw", "Malawi", "mw"),
+    ("congreso2021.iplaneg.net", "Mexico", "mx"),
+    ("geoinfo.iplaneg.net", "Mexico", "mx"),
+    ("geomexicali.info", "Mexico", "mx"),
+    ("geonode.conabio.gob.mx", "Mexico", "mx"),
+    ("geonode.idegeo.centrogeo.org.mx", "Mexico", "mx"),
+    ("geonode.implancmty.geoint.mx", "Mexico", "mx"),
+    ("geonode.matiko.centrogeo.org.mx", "Mexico", "mx"),
+    ("geonode.milpaalta.geoint.mx", "Mexico", "mx"),
+    ("geonode.sgg.geoint.mx", "Mexico", "mx"),
+    ("geonode.spotmet.geoint.mx", "Mexico", "mx"),
+    ("geonode.tlalpan.geoint.mx", "Mexico", "mx"),
+    ("ide.sedatu.gob.mx", "Mexico", "mx"),
+    ("idefor.cnf.gob.mx", "Mexico", "mx"),
+    ("leonatlasriesgo.gob.mx", "Mexico", "mx"),
+    ("sieg.cdmx.gob.mx", "Mexico", "mx"),
+    ("sisplade.geoint.mx", "Mexico", "mx"),
+    ("sqnodo.com", "Mexico", "mx"),
+    ("ismp.water.gov.my", "Malaysia", "my"),
+    ("mymaps.mygeoportal.gov.my", "Malaysia", "my"),
+    ("madico.terrafirma.co.mz", "Mozambique", "mz"),
+    ("data.nigeriase4all.gov.ng", "Nigeria", "ng"),
+    ("gis.ogunstate.gov.ng", "Nigeria", "ng"),
+    ("geonodo.ineter.gob.ni", "Nicaragua", "ni"),
+    ("admin.nationalgeoportal.gov.np", "Nepal", "np"),
+    ("database.ntb.gov.np", "Nepal", "np"),
+    ("geoportal.ntnc.org.np", "Nepal", "np"),
+    ("nationalgeoportal.gov.np", "Nepal", "np"),
+    ("data.codc.govt.nz", "New Zealand", "nz"),
+    ("data.otodc.govt.nz", "New Zealand", "nz"),
+    ("data.wairoadc.govt.nz", "New Zealand", "nz"),
+    ("geo-01.innovacion.gob.pa", "Panama", "pa"),
+    ("luims.dlpp.gov.pg", "Papua New Guinea", "pg"),
+    ("png-geoportal.org", "Papua New Guinea", "pg"),
+    ("carmonagis.org", "Philippines", "ph"),
+    ("crisp.r10.denr.gov.ph", "Philippines", "ph"),
+    ("geonode.tagabukid.net", "Philippines", "ph"),
+    ("gisportal.bukidnon.gov.ph", "Philippines", "ph"),
+    ("muntinlupacity.webgis1.com", "Philippines", "ph"),
+    ("rgin.rdc1.gov.ph", "Philippines", "ph"),
+    ("rgin.rdc9.gov.ph", "Philippines", "ph"),
+    ("geoportal.nsdi.ps", "Palestine", "ps"),
+    ("sig-altotamega.pt", "Portugal", "pt"),
+    ("geohidroinformatica.itaipu.gov.py", "Paraguay", "py"),
+    ("geonode.ine.gov.py", "Paraguay", "py"),
+    ("geoportal.paraguay.gov.py", "Paraguay", "py"),
+    ("fis.upravazasume.gov.rs", "Serbia", "rs"),
+    ("geohazards.rtda.gov.rw", "Rwanda", "rw"),
+    ("geoportal.rwb.rw", "Rwanda", "rw"),
+    ("gdzhao.gmes.cse.sn", "Senegal", "sn"),
+    ("geoportalofhargeisa.org", "Somalia", "so"),
+    ("geodatarisk.tg", "Togo", "tg"),
+    ("sig-anpc.switch-maker.net", "Togo", "tg"),
+    ("geonode.envilink.go.th", "Thailand", "th"),
+    ("portal.dol.go.th", "Thailand", "th"),
+    ("portal.gfms.gistda.or.th", "Thailand", "th"),
+    ("portal.marineportal.gistda.or.th", "Thailand", "th"),
+    ("portal2.marineportal.gistda.or.th", "Thailand", "th"),
+    ("maps.wis.tj", "Tajikistan", "tj"),
+    ("geonode.resilienceacademy.ac.tz", "Tanzania", "tz"),
+    ("geonode.tarurapcugeodata.or.tz", "Tanzania", "tz"),
+    ("geonode.nema.go.ug", "Uganda", "ug"),
+    ("chocofair.dev", "United States", "us"),
+    ("geonode.ggcity.org", "United States", "us"),
+    ("geonode.imperialbeachca.gov", "United States", "us"),
+    ("geonode.state.gov", "United States", "us"),
+    ("geoplatform.spacesur.com", "United States", "us"),
+    ("landscapeportal.org", "United States", "us"),
+    ("mapas.alcaldiademaracaibo.org", "Venezuela (Bolivarian Repu", "ve"),
+    ("congbo.dulieuvientham.gov.vn", "Vietnam", "vn"),
+    ("opendata.hcmgis.vn", "Vietnam", "vn"),
+    ("portal.hcmgis.vn", "Vietnam", "vn"),
+    ("geonode.gov.vu", "Vanuatu", "vu"),
+    ("181.171.117.68", "World", "world"),
+    ("190.112.43.34", "World", "world"),
+    ("196.45.37.197", "World", "world"),
+    ("seagrass.observing.earth", "World", "world"),
+    ("sirei.pariis.net", "World", "world"),
+]
+_GEONODE_TERMS = ["construction", "development", "permit", "mining", "mine", "quarry",
+                  "pipeline", "concession", "infrastructure", "land use", "environmental",
+                  "obra", "proyecto", "mineria", "licencia", "concesion",
+                  "licenciamento", "empreendimento", "amenagement", "permis",
+                  "izin", "tambang", "pembangunan", "amdal",
+                  "cava", "edilizia", "bergbau", "bauleitplan",
+                  "\u03ac\u03b4\u03b5\u03b9\u03b1", "\u03bc\u03b5\u03bb\u03ad\u03c4\u03b7"]
+
+def fetch_geonode_federation(per_portal=None, per_ds=800):
+    per_portal = per_portal or (10 if os.environ.get("HARVEST_FEDERATIONS") == "1" else 6)
+    out = []
+    budget_min = _fed_budget("GEONODE_BUDGET_MIN", 30, 40)
+    t_end = time.time() + budget_min * 60
+    _gn_portals = _shard_list(_GEONODE_PORTALS)
+    for (host, country, cc) in _gn_portals:
+        if time.time() > t_end:
+            _flag("geonode federation hit %d-min budget -- %d portals not reached" %
+                  (budget_min, len(_gn_portals) - _gn_portals.index((host, country, cc))))
+            break
+        layers = []; seen = set()
+        for term in _GEONODE_TERMS:
+            try:
+                u = ("https://%s/api/v2/resources/?page_size=%d&filter{title.icontains}=%s"
+                     % (host, 20, urllib.parse.quote(term)))
+                d = _get_json(u)
+            except Exception:
+                continue
+            items = (d or {}).get("resources") or (d or {}).get("datasets")                     or (d or {}).get("data") or []
+            for it in items:
+                if str(it.get("subtype", "")).lower() not in ("vector", "tabular"):
+                    continue
+                alt = it.get("alternate")
+                if not alt or alt in seen:
+                    continue
+                wfs = None
+                for ln in (it.get("links") or []):
+                    if str(ln.get("link_type", "")).upper() == "OGC:WFS" and ln.get("url"):
+                        wfs = ln["url"]; break
+                wfs = wfs or ("https://%s/geoserver/wfs" % host)
+                seen.add(alt); layers.append((alt, wfs, str(it.get("title") or alt)))
+            time.sleep(0.25)
+            if len(layers) >= per_portal:
+                break
+        for alt, wfs, title in layers[:per_portal]:
+            try:
+                sep = "&" if "?" in wfs else "?"
+                gu = wfs + sep + urllib.parse.urlencode(
+                    {"service": "WFS", "version": "1.1.0", "request": "GetFeature",
+                     "typeName": alt, "outputFormat": "application/json", "maxFeatures": per_ds})
+                gj = _get_json(gu)
+            except Exception:
+                continue
+            feats = gj.get("features") if isinstance(gj, dict) else None
+            if not feats:
+                continue
+            n0 = len(out)
+            for f in feats[:per_ds]:
+                try:
+                    ll = _geom_center(f.get("geometry") or {})
+                    if not ll:
+                        continue
+                    props = f.get("properties") or {}
+                    st = _ods_pick(props, _ODS_STATUSK)
+                    sn = str(st or "").lower().replace("_", " ")
+                    if any(k in sn for k in _ODS_DEAD):
+                        continue
+                    nm = _ods_pick(props, _ODS_NAMEK) or title
+                    p = {"name": nm[:140], "type": "Geospatial dataset (%s)" % country,
+                         "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                         "precise": True, "size": "", "status": st[:40], "company": "",
+                         "url": "https://%s" % host,
+                         "desc": "From %s spatial data (GeoNode) \u00b7 %s." % (country, title[:60]),
+                         "source": "geonode_%s" % cc}
+                    p["impact"] = rate_project(p, sensitivity=0)
+                    out.append(p)
+                except Exception:
+                    continue
+            if len(out) > n0:
+                print("  geonode %s: +%d from '%s'" % (country, len(out) - n0, title[:40]))
+            time.sleep(0.25)
+    print("  geonode federation: %d points from %d portals" % (len(out), len(_GEONODE_PORTALS)))
+    return out
+
+
+# =============================== DKAN federation ===============================
+# DKAN ships two API generations (verified against dkan.readthedocs.io):
+#   * DKAN 7.x  -> CKAN-compatible: GET /api/3/action/package_search?q=&rows=
+#   * DKAN 2.x  -> GET /api/1/metastore/schemas/dataset/items  (dataset list)
+#                 POST /api/1/datastore/query/{id}/0  {"limit":N}  (tabular rows)
+# One fetcher tries both per host (read-only, anonymous). Geo sniffed from geojson
+# resources (7.x) or lat/lng columns (2.x). Terminal states dropped (_ODS_DEAD).
+_DKAN_PORTALS = [
+    ("data.abudhabi", "United Arab Emirates", "ae"),
+    ("datosabiertos.rosario.gob.ar", "Argentina", "ar"),
+    ("americansamoa-data.sprep.org", "Samoa", "as"),
+    ("data.gov.bd", "Bangladesh", "bd"),
+    ("fair.healthdata.be", "Belgium", "be"),
+    ("dados.educacao.sp.gov.br", "Brazil", "br"),
+    ("open.yukon.ca", "Canada", "ca"),
+    ("cookislands-data.sprep.org", "Cook Islands", "ck"),
+    ("datosabiertos.inec.cr", "Costa Rica", "cr"),
+    ("opendata.heredia.go.cr", "Costa Rica", "cr"),
+    ("data.army.cz", "Czech Republic", "cz"),
+    ("data.ctu.cz", "Czech Republic", "cz"),
+    ("kod.opava-city.cz", "Czech Republic", "cz"),
+    ("daten.diepholz.de", "Germany", "de"),
+    ("geo.muelheim-ruhr.de", "Germany", "de"),
+    ("offene-daten-mse.de", "Germany", "de"),
+    ("offenedaten-koeln.de", "Germany", "de"),
+    ("offenedaten-konstanz.de", "Germany", "de"),
+    ("offenedaten-owl.de", "Germany", "de"),
+    ("offenedaten-wuppertal.de", "Germany", "de"),
+    ("offenedaten.duesseldorf.de", "Germany", "de"),
+    ("offenedaten.kdvz-frechen.de", "Germany", "de"),
+    ("offenedaten.kdvz.nrw", "Germany", "de"),
+    ("open-data.bielefeld.de", "Germany", "de"),
+    ("opendata-duisburg.de", "Germany", "de"),
+    ("opendata.bonn.de", "Germany", "de"),
+    ("opendata.braunschweig.de", "Germany", "de"),
+    ("opendata.duesseldorf.de", "Germany", "de"),
+    ("opendata.essen.de", "Germany", "de"),
+    ("opendata.gelsenkirchen.de", "Germany", "de"),
+    ("opendata.heilbronn.de", "Germany", "de"),
+    ("opendata.oldenburg.de", "Germany", "de"),
+    ("opendata.stadt-muenster.de", "Germany", "de"),
+    ("dadesobertes.diba.cat", "Spain", "es"),
+    ("datos.cadiz.es", "Spain", "es"),
+    ("datosabiertos.alicante.es", "Spain", "es"),
+    ("datosabiertos.castillalamancha.es", "Spain", "es"),
+    ("datosabiertos.ctpdandalucia.es", "Spain", "es"),
+    ("opendata.turismoconil.es", "Spain", "es"),
+    ("opendatahubs.eu", "European Union", "eu"),
+    ("fsm-data.sprep.org", "Micronesia", "fm"),
+    ("data.montpellier3m.fr", "France", "fr"),
+    ("data.cambridgeshireinsight.org.uk", "United Kingdom", "gb"),
+    ("data.marine.gov.scot", "United Kingdom", "gb"),
+    ("data.gov.gh", "Ghana", "gh"),
+    ("catalog.hcapdata.gr", "Greece", "gr"),
+    ("data.apdkritis.gov.gr", "Greece", "gr"),
+    ("data.ktimatologio.gr", "Greece", "gr"),
+    ("data.trikalacity.gr", "Greece", "gr"),
+    ("opencrete.gov.gr", "Greece", "gr"),
+    ("opendata.thessaloniki.gr", "Greece", "gr"),
+    ("data.grad-krk.hr", "Croatia", "hr"),
+    ("data.lahatkab.go.id", "Indonesia", "id"),
+    ("data.lomboktimurkab.go.id", "Indonesia", "id"),
+    ("data.manggaraibaratkab.go.id", "Indonesia", "id"),
+    ("data.ntbprov.go.id", "Indonesia", "id"),
+    ("opendata.lampungprov.go.id", "Indonesia", "id"),
+    ("opendata.tangerangkab.go.id", "Indonesia", "id"),
+    ("pusdataru.jatengprov.go.id", "Indonesia", "id"),
+    ("satudata.dinkes.riau.go.id", "Indonesia", "id"),
+    ("data.telangana.gov.in", "India", "in"),
+    ("geoportal.natmo.gov.in", "India", "in"),
+    ("ssdi.jk.gov.in", "India", "in"),
+    ("dati.genovametropoli.it", "Italy", "it"),
+    ("opendata.cittametropolitanaroma.it", "Italy", "it"),
+    ("opendata.comune.parma.it", "Italy", "it"),
+    ("opengolfo.it", "Italy", "it"),
+    ("data.gov.jm", "Jamaica", "jm"),
+    ("data.city.kyoto.lg.jp", "Japan", "jp"),
+    ("kiribati-data.sprep.org", "Kiribati", "ki"),
+    ("data.gov.lk", "Sri Lanka", "lk"),
+    ("rmi-data.sprep.org", "Republic of Marshall Islan", "mh"),
+    ("data.govmu.org", "Mauritius", "mu"),
+    ("datos.imss.gob.mx", "Mexico", "mx"),
+    ("datos.pueblacapital.gob.mx", "Mexico", "mx"),
+    ("datos.zapopan.gob.mx", "Mexico", "mx"),
+    ("datosabiertos.cholula.gob.mx", "Mexico", "mx"),
+    ("newcaledonia-data.sprep.org", "New Caledonia", "nc"),
+    ("nauru-data.sprep.org", "Nauru", "nr"),
+    ("niue-data.sprep.org", "Niue", "nu"),
+    ("pacific-data.sprep.org", "Oceania", "oceania"),
+    ("datosabiertos.regioncajamarca.gob.pe", "Peru", "pe"),
+    ("png-data.sprep.org", "Papua New Guinea", "pg"),
+    ("opendata.sarai.ph", "Philippines", "ph"),
+    ("e-uslugi.mazowieckie.pl", "Poland", "pl"),
+    ("epibaza.pzh.gov.pl", "Poland", "pl"),
+    ("omat.cm-loule.pt", "Portugal", "pt"),
+    ("palau-data.sprep.org", "Palau", "pw"),
+    ("opendata.yarcloud.ru", "Russian Federation", "ru"),
+    ("solomonislands-data.sprep.org", "Solomon Islands", "sb"),
+    ("tonga-data.sprep.org", "Tonga", "to"),
+    ("tuvalu-data.sprep.org", "Tuvalu", "tv"),
+    ("opendata.kalushcity.gov.ua", "Ukraine", "ua"),
+    ("data.georgia.gov", "United States", "us"),
+    ("data.medicaid.gov", "United States", "us"),
+    ("data.nal.usda.gov", "United States", "us"),
+    ("open.obamawhitehouse.archives.gov", "United States", "us"),
+    ("rdx.stldata.org", "United States", "us"),
+    ("rtams.org", "United States", "us"),
+    ("datos.gob.ve", "Venezuela (Bolivarian Repu", "ve"),
+    ("opendata.hochiminhcity.gov.vn", "Vietnam", "vn"),
+    ("vanuatu-data.sprep.org", "Vanuatu", "vu"),
+    ("rio-samoa.mnre.gov.ws", "Samoa", "ws"),
+    ("samoa-data.sprep.org", "Samoa", "ws"),
+]
+
+def fetch_dkan_federation(per_portal=None, per_ds=800):
+    per_portal = per_portal or (10 if os.environ.get("HARVEST_FEDERATIONS") == "1" else 6)
+    out = []
+    budget_min = _fed_budget("DKAN_BUDGET_MIN", 25, 25)
+    t_end = time.time() + budget_min * 60
+    _dk_portals = _shard_list(_DKAN_PORTALS)
+    for (host, country, cc) in _dk_portals:
+        if time.time() > t_end:
+            _flag("dkan federation hit %d-min budget -- %d portals not reached" %
+                  (budget_min, len(_dk_portals) - _dk_portals.index((host, country, cc))))
+            break
+        base = "https://%s" % host
+        n_before = len(out)
+        # -- path A: CKAN-compatible (DKAN 7.x) --
         pkgs = []; seen = set()
-        for term in _CKAN_TERMS[:4]:
+        for term in _CKAN_TERMS[:20]:
+            try:
+                u = base + "/api/3/action/package_search?" + urllib.parse.urlencode({"q": term, "rows": 100})
+                d = _get_json(u)
+            except Exception:
+                continue
+            for pk in (((d or {}).get("result") or {}).get("results") or []):
+                nm = str(pk.get("title") or pk.get("name") or "")
+                if pk.get("id") in seen or not _CKAN_TITLE_RE.search(nm): continue
+                seen.add(pk.get("id")); pkgs.append(pk)
+            time.sleep(0.2)
+            if len(pkgs) >= per_portal: break
+        got = 0
+        for pk in pkgs[:per_portal]:
+            geo = [r for r in (pk.get("resources") or [])
+                   if str(r.get("format", "")).lower() in ("geojson", "json") and r.get("url")]
+            if not geo:                                   # CSV-only portal -> sniff lat/lng columns
+                csvs = [r for r in (pk.get("resources") or [])
+                        if str(r.get("format", "")).lower() == "csv" and r.get("url")]
+                for r in csvs[:1]:
+                    rows_csv = _fed_csv_points(r["url"], country, cc, "dkan_",
+                                               str(pk.get("title") or "Permit"), base, per_ds)
+                    if rows_csv:
+                        got += 1; out.extend(rows_csv)
+                        print("  dkan %s: +%d from CSV '%s'" % (country, len(rows_csv),
+                                                                str(pk.get("title"))[:40]))
+                    time.sleep(0.3)
+            for r in geo[:1]:
+                try:
+                    gj = _get_json(r["url"])
+                except Exception:
+                    continue
+                for f in (gj.get("features") if isinstance(gj, dict) else []) or []:
+                    try:
+                        ll = _geom_center(f.get("geometry") or {})
+                        if not ll: continue
+                        props = f.get("properties") or {}
+                        st = _ods_pick(props, _ODS_STATUSK); sn = str(st or "").lower().replace("_", " ")
+                        if any(k in sn for k in _ODS_DEAD): continue
+                        nm = _ods_pick(props, _ODS_NAMEK) or str(pk.get("title") or "Permit")
+                        p = {"name": nm[:140], "type": "Permit / development (%s)" % country,
+                             "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                             "precise": True, "size": "", "status": st[:40], "company": "",
+                             "url": base, "desc": "From %s open data (DKAN) \u00b7 %s." %
+                             (country, str(pk.get("title") or "")[:60]), "source": "dkan_%s" % cc}
+                        p["impact"] = rate_project(p, sensitivity=0)
+                        out.append(p)
+                    except Exception:
+                        continue
+                time.sleep(0.2)
+        # -- path B: DKAN 2.x metastore + datastore (only if A found nothing) --
+        if len(out) == n_before:
+            try:
+                items = _get_json(base + "/api/1/metastore/schemas/dataset/items?show-reference-ids")
+            except Exception:
+                items = None
+            hits = []
+            for it in (items or []):
+                if not isinstance(it, dict): continue
+                nm = str(it.get("title") or "")
+                if _CKAN_TITLE_RE.search(nm) and it.get("identifier"):
+                    hits.append((it.get("identifier"), nm))
+                if len(hits) >= per_portal: break
+            for did, title in hits:
+                try:
+                    body = json.dumps({"limit": min(per_ds, 500)}).encode("utf-8")
+                    req = urllib.request.Request(base + "/api/1/datastore/query/%s/0" % did,
+                                                 data=body, method="POST",
+                                                 headers={"User-Agent": UA, "Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        qd = json.loads(resp.read().decode("utf-8", "replace"))
+                except Exception:
+                    continue
+                for row in ((qd or {}).get("results") or []):
+                    try:
+                        if not isinstance(row, dict): continue
+                        ll = _ods_latlng(row)
+                        if not ll: continue
+                        st = _ods_pick(row, _ODS_STATUSK); sn = str(st or "").lower().replace("_", " ")
+                        if any(k in sn for k in _ODS_DEAD): continue
+                        nm = _ods_pick(row, _ODS_NAMEK) or title
+                        p = {"name": nm[:140], "type": "Permit / development (%s)" % country,
+                             "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                             "precise": True, "size": "", "status": st[:40], "company": "",
+                             "url": base, "desc": "From %s open data (DKAN) \u00b7 %s." %
+                             (country, title[:60]), "source": "dkan_%s" % cc}
+                        p["impact"] = rate_project(p, sensitivity=0)
+                        out.append(p)
+                    except Exception:
+                        continue
+                time.sleep(0.2)
+        if len(out) > n_before:
+            print("  dkan %s (%s): +%d" % (country, host, len(out) - n_before))
+    print("  dkan federation: %d points from %d portals" % (len(out), len(_DKAN_PORTALS)))
+    return out
+
+
+# =============================== uData federation ===============================
+# uData API v1 (verified against guides.data.gouv.fr): GET /api/1/datasets/?q=&page_size=
+#   -> {"data":[{"resources":[{"format":"geojson","url":..}], "title":..}]}  (open, no key).
+# data.gouv.fr is the flagship (Sitadel pulls only ONE dataset from it; this searches broadly).
+_UDATA_PORTALS = [
+    ("www.data.gouv.fr", "France", "fr"),
+    ("dados.gov.pt", "Portugal", "pt"),
+]
+
+def _fed_csv_points(url, country, cc, src_prefix, ds_title, base_url, per_ds=800):
+    """Fallback for CSV-only open-data portals: download one CSV (size-capped),
+    BOM-detect encoding (UTF-16 goget lesson), sniff the delimiter, then reuse the
+    shared lat/lng + name/status sniffers row by row."""
+    import csv as _csv, io as _io
+    out = []
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            raw = r.read(15000000)
+    except Exception:
+        return out
+    enc = "utf-8-sig"
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"): enc = "utf-16"
+    try:
+        text = raw.decode(enc, "replace")
+    except Exception:
+        return out
+    head = text[:4000]
+    delim = ";" if head.count(";") > head.count(",") else ","
+    if head.count("\t") > max(head.count(","), head.count(";")): delim = "\t"
+    try:
+        rdr = _csv.DictReader(_io.StringIO(text), delimiter=delim)
+        for i, row in enumerate(rdr):
+            if i >= per_ds: break
+            if not isinstance(row, dict): continue
+            row = {str(k or ""): v for k, v in row.items()}
+            ll = _ods_latlng(row)
+            if not ll: continue
+            la, lo = ll
+            if not (-90 <= la <= 90 and -180 <= lo <= 180): continue
+            st = _ods_pick(row, _ODS_STATUSK); sn = str(st or "").lower().replace("_", " ")
+            if any(k in sn for k in _ODS_DEAD): continue
+            nm = _ods_pick(row, _ODS_NAMEK) or ds_title
+            p = {"name": nm[:140], "type": "Permit / development (%s)" % country,
+                 "state": country, "lat": round(la, 5), "lng": round(lo, 5),
+                 "precise": True, "size": "", "status": str(st or "")[:40], "company": "",
+                 "url": base_url, "desc": "From %s open data (CSV) \u00b7 %s." % (country, ds_title[:60]),
+                 "source": "%s%s" % (src_prefix, cc)}
+            p["impact"] = rate_project(p, sensitivity=0)
+            out.append(p)
+    except Exception:
+        pass
+    return out
+
+def fetch_udata_federation(per_portal=8, per_ds=800):
+    out = []
+    for (host, country, cc) in _UDATA_PORTALS:
+        seen = set(); dss = []
+        for term in _CKAN_TERMS[:16]:
+            try:
+                u = "https://%s/api/1/datasets/?%s" % (
+                    host, urllib.parse.urlencode({"q": term, "page_size": 20}))
+                d = _get_json(u)
+            except Exception:
+                continue
+            for ds in ((d or {}).get("data") or []):
+                did = ds.get("id") or ds.get("slug")
+                if not did or did in seen: continue
+                if not _CKAN_TITLE_RE.search(str(ds.get("title") or "")): continue
+                seen.add(did); dss.append(ds)
+            time.sleep(0.25)
+            if len(dss) >= per_portal: break
+        for ds in dss[:per_portal]:
+            geo = [r for r in (ds.get("resources") or [])
+                   if str(r.get("format", "")).lower() in ("geojson", "json") and r.get("url")]
+            if not geo:                                   # CSV-only dataset -> sniff lat/lng columns
+                csvs = [r for r in (ds.get("resources") or [])
+                        if str(r.get("format", "")).lower() == "csv" and r.get("url")]
+                for r in csvs[:1]:
+                    rows_csv = _fed_csv_points(r["url"], country, cc, "udata_",
+                                               str(ds.get("title") or "Permit"),
+                                               "https://%s" % host, per_ds)
+                    if rows_csv:
+                        out.extend(rows_csv)
+                        print("  udata %s: +%d from CSV '%s'" % (country, len(rows_csv),
+                                                                 str(ds.get("title"))[:40]))
+                    time.sleep(0.25)
+            for r in geo[:1]:
+                try:
+                    gj = _get_json(r["url"])
+                except Exception:
+                    continue
+                n0 = len(out)
+                for f in (gj.get("features") if isinstance(gj, dict) else []) or []:
+                    try:
+                        ll = _geom_center(f.get("geometry") or {})
+                        if not ll: continue
+                        props = f.get("properties") or {}
+                        st = _ods_pick(props, _ODS_STATUSK); sn = str(st or "").lower().replace("_", " ")
+                        if any(k in sn for k in _ODS_DEAD): continue
+                        nm = _ods_pick(props, _ODS_NAMEK) or str(ds.get("title") or "Permit")
+                        p = {"name": nm[:140], "type": "Permit / development (%s)" % country,
+                             "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                             "precise": True, "size": "", "status": st[:40], "company": "",
+                             "url": "https://%s" % host,
+                             "desc": "From %s open data (uData) \u00b7 %s." % (country, str(ds.get("title") or "")[:60]),
+                             "source": "udata_%s" % cc}
+                        p["impact"] = rate_project(p, sensitivity=0)
+                        out.append(p)
+                    except Exception:
+                        continue
+                if len(out) > n0:
+                    print("  udata %s: +%d from '%s'" % (country, len(out) - n0, str(ds.get("title"))[:40]))
+                time.sleep(0.25)
+    print("  udata federation: %d points from %d portals" % (len(out), len(_UDATA_PORTALS)))
+    return out
+
+
+# ============================ WFS / GeoServer federation ============================
+# Generic OGC WFS federation over government GeoServer / WFS endpoints mined from the
+# dataportals registry (software=geoserver OR endpoint type wfs*). Per endpoint:
+#   GetCapabilities (XML) -> FeatureType Name/Title -> keep dev/permit/mining/EIA layers
+#   GetFeature outputFormat=application/json (GeoJSON) -> features -> sniff -> emit.
+# Namespace-agnostic XML parse; size/parse/timeout-guarded; terminal states dropped.
+# Layer scope is coarse (some layers are inventories/basemaps) -> FIRST-RUN REVIEW.
+import xml.etree.ElementTree as _ET
+_WFS_ENDPOINTS = [
+    # EU-wide aggregator (verified live): offshore wind farms (status incl Planned/Approved/
+    # Construction), oil & gas licences, pipelines across 18 European countries
+    ("https://ows.emodnet-humanactivities.eu/wfs", "EU waters", "eu"),
+    ("https://www.ideandorra.ad/Serveis/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Andorra", "ad"),
+    ("https://nafcoast.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Africa", "africa"),
+    ("https://climateriskmap.environment.gov.ag/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Antigua and Barbuda", "ag"),
+    ("https://nri.environment.gov.ag/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Antigua and Barbuda", "ag"),
+    ("http://aicsig.neuquen.gov.ar:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://atmgis.mendoza.gov.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://g.geosplan.tucuman.gob.ar:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://g.geosplan.tucuman.gov.ar:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://geo2.ambiente.gob.ar/geoserver/ows", "Argentina", "ar"),
+    ("http://geoeducacion.neuquen.gov.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://geointa.inta.gov.ar/geoserver/ows", "Argentina", "ar"),
+    ("http://geoportal.idesa.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://geosalud.neuquen.gov.ar:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://gisestadisticanqn.neuquen.gov.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://ide.sedronar.gov.ar/geoserver/ows", "Argentina", "ar"),
+    ("http://ideneu.neuquen.gov.ar:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://idet.tucuman.gob.ar:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://municipiosig.rionegro.gov.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://rechidr.neuquen.gov.ar:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://redvial.neuquen.gov.ar:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://sigdefensacivil.neuquen.gov.ar:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://www.coronelsuarezgis.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://www.siat.mendoza.gov.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://alerta.ina.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://datos.inidep.edu.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://estadisticasig.rionegro.gov.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geo.ambiente.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geo.gualeguaychu.gov.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geo.test.arba.gov.ar/geoserver/ows", "Argentina", "ar"),
+    ("https://geoadmin.magyp.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geonode.pergamino.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geonode.senasa.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoportal.cfi.org.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoportal.lujandecuyo.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoportal.obraspublicas.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoportal.salta.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoportal.tresdefebrero.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoportalqa.lujandecuyo.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoserver-nodo2.ideba.gba.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoserver.agroindustria.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoserver.sanbenito.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoservicios.conae.gov.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://geoservicios.indec.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://hidrocarburos.energianeuquen.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://ide-enacom.arsat.com.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://ide.correoargentino.com.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://ide.pergamino.gob.ar:8443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://ide.santarosamendoza.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://ide.transporte.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://idern.rionegro.gov.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://imagenes.ign.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://manejodelfuego.conae.gov.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://mapa.educacion.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://mapas.geomatica.idr.org.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://mapas.sancarlos.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://nodo.cfi.org.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://oat.ambiente.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://poblacion.idear.gov.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://riesgo.ign.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://saludsig.rionegro.gov.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://sigam.segemar.gov.ar/geoserver/ows", "Argentina", "ar"),
+    ("https://sigvial.dpvmisiones.gob.ar/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://wms.ign.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("https://www.ide.posadas.gob.ar/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Argentina", "ar"),
+    ("http://geo.noe.gv.at/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Austria", "at"),
+    ("https://geo.kaerntennetz.at/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Austria", "at"),
+    ("https://geogis.ages.at:443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Austria", "at"),
+    ("https://geonode.lebensraumvernetzung.at/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Austria", "at"),
+    ("https://gis.geologie.ac.at/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Austria", "at"),
+    ("https://sdigeo-free.austrocontrol.at/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Austria", "at"),
+    ("http://data.daff.gov.au:8080/geoserver/ows", "Australia", "au"),
+    ("http://gaservices.ga.gov.au:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("http://geoserver.dea.ga.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("http://nhirs.ga.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("http://services.aad.gov.au/geoserver/ows", "Australia", "au"),
+    ("http://services.ga.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://auth2.dbca.wa.gov.au/geoserver/ows", "Australia", "au"),
+    ("https://geology.data.nt.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://geology.information.qld.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://geoserver.tern.org.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://gs-mv-dev.geoscience.nsw.gov.au/geoserver/ows", "Australia", "au"),
+    ("https://gs-mv.geoscience.nsw.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://gs-seamless.geoscience.nsw.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://gs.geoscience.nsw.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://kmi.dpaw.wa.gov.au/geoserver/ows", "Australia", "au"),
+    ("https://opendata.maps.vic.gov.au/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("https://programs.communications.gov.au/geoserver/ows", "Australia", "au"),
+    ("https://sarigdata.pir.sa.gov.au/nvcl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Australia", "au"),
+    ("http://202.4.179.152/geoserver/wfs", "Bangladesh", "bd"),
+    ("http://geoportal.bforest.gov.bd/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bangladesh", "bd"),
+    ("https://gis.nesco.gov.bd/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bangladesh", "bd"),
+    ("https://nsdi.gov.bd/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bangladesh", "bd"),
+    ("http://data-mobility.irisnet.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("http://geoserver.gis.irisnet.be/geoserver/ows", "Belgium", "be"),
+    ("http://geoservices-inspire.irisnet.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("http://geoservices-urbis.irisnet.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("http://www.dov.vlaanderen.be:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://bathgrid.vlaanderen.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://data.mobility.brussels/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geo.api.vlaanderen.be/GRB/wfs?service=WFS&version=2.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geo.onroerenderfgoed.be:443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geodata.toerismevlaanderen.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geoserver.gis.cloud.mow.vlaanderen.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geoserver.vmm.be/geoserver/wfs?service=WFS&version=2.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geoservices-others.irisnet.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geoservices.valid.wallonie.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://geoservices.wallonie.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://gis.urban.brussels/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://klimaat.vmm.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://mister.vlaanderen.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("https://mybrugis.irisnet.be/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belgium", "be"),
+    ("http://www.bumigeb.bf/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Burkina Faso", "bf"),
+    ("https://geoportail.bumigeb.bf/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Burkina Faso", "bf"),
+    ("http://46.165.252.159/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bulgaria", "bg"),
+    ("http://84.16.227.175/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bulgaria", "bg"),
+    ("http://inspire.mzh.government.bg:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bulgaria", "bg"),
+    ("https://georisk.gouv.bj/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Benin", "bj"),
+    ("https://sig.sineb.bj/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Benin", "bj"),
+    ("http://geo.siarh.gob.bo/geoserver/ows", "Bolivia", "bo"),
+    ("http://geo03.siarh.gob.bo/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("http://geodata.oopp.gob.bo/geoserver/ows", "Bolivia", "bo"),
+    ("http://geosinager.defensacivil.gob.bo/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("http://geosirh.riegobolivia.org:80/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("http://geosunit.vicetierras.gob.bo/geoserver/ows", "Bolivia", "bo"),
+    ("http://maps.abe.bo:8081/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("http://siged.ine.gob.bo/geoserver/ows", "Bolivia", "bo"),
+    ("http://sigvmeea.minenergias.gob.bo/geoserver/ows", "Bolivia", "bo"),
+    ("http://siip.produccion.gob.bo:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("http://sitservicios.lapaz.bo/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("https://aetn.geo.gob.bo/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("https://dgf.geo.gob.bo/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("https://geo.inra.gob.bo/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("https://geonode.fonadin.gob.bo/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("https://geoportal.mhe.gob.bo/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("https://ipdsa.geo.gob.bo/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bolivia", "bo"),
+    ("http://geoinfo.cnps.embrapa.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("http://geoserver.sobral.ce.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("http://raster.geosampa.prefeitura.sp.gov.br:80/geoserver/ows", "Brazil", "br"),
+    ("http://sig.amvali.org.br/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("http://siscom.ibama.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("http://wfs.geosampa.prefeitura.sp.gov.br:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("http://wms.geosampa.prefeitura.sp.gov.br:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("http://wms.geosampa.prodam/geoserver/ows", "Brazil", "br"),
+    ("http://www.geoservicos.ibge.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://arvorezinha.geomunicipios.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://catalogo.ipe.df.gov.br/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://dados.it-amazonia.dev/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://geoaisweb.decea.mil.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://geodados.daee.sp.gov.br/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://geoserver.car.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://geoserver.funai.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://geoserver.meioambiente.mg.gov.br/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://geoserver.praiagrande.sp.gov.br/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://ibram.df.gov.br/geoserver/ows", "Brazil", "br"),
+    ("https://ide.geobases.es.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://imde.portoalegre.rs.gov.br/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://siga.meioambiente.go.gov.br/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://sigahomol.meioambiente.go.gov.br/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://sistemas.florestal.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Brazil", "br"),
+    ("https://www.brasiliaambiental.df.gov.br/geoserver/ows", "Brazil", "br"),
+    ("https://cgi-gn.nlcs.gov.bt/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Bhutan", "bt"),
+    ("https://meta.geo.by/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Belarus", "by"),
+    ("http://geogratis.gc.ca:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://canada3d.geosciences.ca/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://data.chs-shc.ca/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://geo.lachute.ca/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://geonode.doigriverfn.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://gis.crgl.ca/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://nonna-geoserver.data.chs-shc.ca/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://servicesvecto3.mern.gouv.qc.ca/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://www.marinfo.gc.ca/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Canada", "ca"),
+    ("https://sdi.georhena.eu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Switzerland", "ch"),
+    ("http://anidlimarichoapa.ciren.cl/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Chile", "cl"),
+    ("http://apibotanico.ciren.cl/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Chile", "cl"),
+    ("http://idemagallanes.cl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Chile", "cl"),
+    ("http://inventarioerosion.ciren.cl/sitemap.xml/wfs", "Chile", "cl"),
+    ("http://www.geoportal.cl/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Chile", "cl"),
+    ("https://geonode.meteochile.gob.cl/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Chile", "cl"),
+    ("https://geoserver.exploradorenergia.cl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Chile", "cl"),
+    ("https://geoserver.infor.cl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Chile", "cl"),
+    ("https://ide.emprendequillota.cl/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Chile", "cl"),
+    ("https://geo.snh.cm/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Cameroon", "cm"),
+    ("http://ws-idesc.cali.gov.co:8081/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Colombia", "co"),
+    ("https://sig.cormacarena.gov.co/geoserver/ows", "Colombia", "co"),
+    ("http://catastro.munisc.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://geonode.bgeoinorca.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://geoportal-saracc.cne.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://gestorgeo.inec.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://ide.santaana.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://ideonion.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://idesca.munisc.go.cr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://metadatos.ideonion.go.cr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://raster.munisc.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://sae.inec.go.cr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Costa Rica", "cr"),
+    ("https://idema.geotech.cu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Cuba", "cu"),
+    ("https://gis.cenia.cz/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Czech Republic", "cz"),
+    ("https://jsdi01.secar.cz/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Czech Republic", "cz"),
+    ("https://opgis.slavicin.unart.cz/geoserver/ows", "Czech Republic", "cz"),
+    ("http://185.17.146.157/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("http://WFS-Kataster.fuerstenwalde-spree.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://geodaten.metropoleruhr.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://geoportal.birkenwerder.de:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://geoportal.eberswalde.de:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://geoportal.kreis-lup.de:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://mdi.niedersachsen.de:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://weinlagen.lwk-rlp.de:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://wms.fis-wasser-mv.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("http://www.brandenburg-forst.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://api.viz.berlin.de/geoserver/ows", "Germany", "de"),
+    ("https://breitband-in-sh.de/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("https://bsis.aachen.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://cdc.dwd.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://elsterwerda.gajamatrix.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geo-katalog.julius-kuehn.de/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geodaten.herne.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geoportal.giz.de/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geoportal.muenchen.de:443/geoserver/ows", "Germany", "de"),
+    ("https://geoportal.stadt.wolfsburg.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geoserver.digitale-mrn.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geoserver.geonet-mrn.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://geoserver.stuttgart.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://gis.amberg-sulzbach.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://gis.kultus-bw.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://gis.planungsregion-abw.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://giz.sta.hz.kartoza.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("https://maps.dwd.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://mdi-de-dienste.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://milton-geo.thw-fts.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("https://nng.riwagis.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://plis-bb.de/plisproject/inspire/index.php/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://rudolstadt.gajamatrix.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://sla.niedersachsen.de/ml-geoportal/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://stadtplan.weimar.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://webgis.regionalverband-braunschweig.de/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Germany", "de"),
+    ("https://www.pegelmobil.de/geoserver/ows", "Germany", "de"),
+    ("https://www.waldgeoportal.de/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Germany", "de"),
+    ("http://fiskeriservice.fiskeristyrelsen.dk/geoserver/ows", "Denmark", "dk"),
+    ("http://geodata.fvm.dk/geoserver/ows", "Denmark", "dk"),
+    ("http://geoserver.surfacewater.miljoeportal.dk/geoserver/ows", "Denmark", "dk"),
+    ("http://jordbrugsanalyser.dk/geoserver/ows", "Denmark", "dk"),
+    ("http://vmgeoserver.vd.dk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Denmark", "dk"),
+    ("http://webkort.silkeborg.dk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Denmark", "dk"),
+    ("http://wfs.plansystem.dk/geoserver/ows", "Denmark", "dk"),
+    ("https://geoserver.plandata.dk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Denmark", "dk"),
+    ("https://havplan.dk/geoserver/ows", "Denmark", "dk"),
+    ("https://kortdata.fvm.dk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Denmark", "dk"),
+    ("https://dominode.dm/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Dominica", "dm"),
+    ("http://ozf.economia.gob.do/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("https://cartografia.ayuntamientosantiago.gob.do/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("https://geoportal.catastro.gob.do/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("https://geoportal.iderd.gob.do/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("https://geoportal.pedepe.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("https://inventariovial.mopc.gob.do/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("https://plataforma.sini.gob.do/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Republica Dominicana", "do"),
+    ("http://geoportal.sigtierras.gob.ec:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Ecuador", "ec"),
+    ("https://geonode.inec.gob.ec/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ecuador", "ec"),
+    ("https://geoservicios.inamhi.gob.ec/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ecuador", "ec"),
+    ("https://geovisor.manabi.gob.ec/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ecuador", "ec"),
+    ("https://www.geoportal.ame.gob.ec/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ecuador", "ec"),
+    ("https://gsavalik.envir.ee/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Estonia", "ee"),
+    ("https://inspire.geoportaal.ee/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Estonia", "ee"),
+    ("https://kls.pria.ee/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Estonia", "ee"),
+    ("https://data.transportforcairo.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Egypt", "eg"),
+    ("http://geoserver.costadelsolmalaga.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://geoserver.icgc.cat:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://ide.ticmallorca.net/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://idechg.chguadalquivir.es:80/geoserver/ows", "Spain", "es"),
+    ("http://oden.diputaciolleida.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://siurana.icgc.cat/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://visorrpgur.asturias.es:8090/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://www.geoportalagriculturaypesca.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://alzira.gvsigonline.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://bomberos.gvsigonline.com/geoserver/wms/wfs", "Spain", "es"),
+    ("https://geonode.arxiuhistoricpoblenou.cat/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Spain", "es"),
+    ("https://geoportal-lavalldegallinera.geoinnova.es/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Spain", "es"),
+    ("https://geoserver.puertos.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://geoserver.villanuevadelaserena.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://gestion4-idearagon.aragon.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://ide.caceres.es/geoserver/wms/wfs", "Spain", "es"),
+    ("https://ide.cime.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://idearagon.aragon.es:443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://idecyl.jcyl.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://mapas-gis-inter.carm.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://mapas.idepa.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://meteogalicia.gal/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://opengeo-gis.carm.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://ortofotos-gis.carm.es:443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("https://pmpc-arandadeduero.geoinnova.es/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Spain", "es"),
+    ("https://www.pescacastillayleon.es/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Spain", "es"),
+    ("http://geo.portal.ebi.gov.et/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ethiopia", "et"),
+    ("http://lbdcdirectory.gov.et/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ethiopia", "et"),
+    ("http://qfield.cloud.ebi.gov.et/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ethiopia", "et"),
+    ("http://www.ethionsdi.gov.et/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ethiopia", "et"),
+    ("https://lsc-hub.eiar.gov.et/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ethiopia", "et"),
+    ("https://nsis.moa.gov.et/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ethiopia", "et"),
+    ("http://climate-adapt.eea.europa.eu/geoserver/ows", "European Union", "eu"),
+    ("http://geospatial2.jrc.ec.europa.eu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "European Union", "eu"),
+    ("https://geospatial.jrc.ec.europa.eu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "European Union", "eu"),
+    ("https://iws.seastorms.eu/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "European Union", "eu"),
+    ("https://www.portodimare.eu/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "European Union", "eu"),
+    ("http://avoinkara.mmm.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://geo.stat.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://geoserver.lounaistieto.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://gtkimage.gtk.fi:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://kartta.suomi.fi/geoserver/wfs", "Finland", "fi"),
+    ("http://maps.luke.fi:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://openwms.fmi.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://paikkatieto.jamsa.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://avoindata.kotka.fi:8443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://data.nsdc.fmi.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://enontekio.ubihub.io/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://geodata.tampere.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://georaster.tampere.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://geoserv.stat.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://geoserver.hel.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://geoserver.ymparisto.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://geosrv.sipoo.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://gis.paimio.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://gis.vantaa.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://inspire.ruokavirasto-awsa.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://ixgsmap2.ymparisto.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://kartta.hel.fi/ws/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://kartta.hsy.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://opendata.ymparistonyt.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://paikkatiedot.ymparisto.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://rajapinnat.metsaan.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("https://tieto.pirkanmaa.fi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Finland", "fi"),
+    ("http://CLC.developpement-durable.gouv.fr/geoserver/ows", "France", "fr"),
+    ("http://alsace.websol.fr:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("http://geo.compiegnois.fr/geoserver/ows", "France", "fr"),
+    ("http://geo.valdille-aubigne.fr.fr/geoserver/ows", "France", "fr"),
+    ("http://geoserver.lannion-tregor.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("http://ids.pigma.org/geoserver/ows", "France", "fr"),
+    ("http://services.vuduciel.loire-atlantique.fr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("http://valsdesaintonge-sig.org:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("http://www.sig.cg971.fr:8080/geoserver/ows", "France", "fr"),
+    ("https://artois-picardie.eaufrance.fr:443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://atmo-bfc.iad-informatique.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://catalogue.guyane-sig.fr/geoserver/ows", "France", "fr"),
+    ("https://data.sigea.educagri.fr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "France", "fr"),
+    ("https://dev.pigma.org/geoserver/ows", "France", "fr"),
+    ("https://geo.valdille-aubigne.fr/geoserver/ows", "France", "fr"),
+    ("https://geonode.recette.oieau.fr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "France", "fr"),
+    ("https://georchestra.cbnbl.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://opendata.agglo-lepuyenvelay.fr/geoserver/ows", "France", "fr"),
+    ("https://ows.region-bretagne.fr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://pigma.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://ppige-npdc.fr/geoserver/ows", "France", "fr"),
+    ("https://qualif.data.sigea.educagri.fr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "France", "fr"),
+    ("https://scot.datasud.fr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://sig.atmo-auvergnerhonealpes.fr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://sigcapa.fr:8443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "France", "fr"),
+    ("https://www.geoplateforme17.fr/geoserver/ows", "France", "fr"),
+    ("https://www.ppige-npdc.fr:443/geoserver/ows", "France", "fr"),
+    ("http://apps.hinckley-bosworth.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://arcgisweb.fife.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://data.nottinghamshire.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://geonet.allerdale.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://geoserver.rushmoor.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://gistch1.copelandbc.org.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.dundeecity.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.halton.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.nationalparks.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.northdevon.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.redcar-cleveland.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.ribblevalley.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.sthelens.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.worcester.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://inspire.wychavon.gov.uk:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://kgeo.knowsley.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://mapping.broxbourne.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://maps.communities.gov.uk:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://maps.darlington.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://maps.northlincs.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://maps.scarborough.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://maps.staffordbc.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://w3.blaby.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://w3.fylde.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://webmap.stockton.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://www.gis.northlincs.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://www.map.hackney.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://www.newcastle-staffs.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("http://www.rbkc.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://data.angus.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://datamap.gov.wales/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://geo.powys.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://geo.spatialhub.scot/geoserver/ows", "United Kingdom", "gb"),
+    ("https://geodata.rbwm.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://geoserver.rcdo.co.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://gis.beacons-npa.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://gis.cumbria.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://gis.herefordshire.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://hbcmaps.harrogate.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://inspire.nationalparks.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://inspire.northyorkmoors.org.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://inspire.pembrokeshire.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://map.salford.gov.uk:443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://maps.cheshireeast.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://maps.dartmoor.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://maps.middevon.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://maps.runnymede.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://ogc.nature.scot/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://spatial.stockport.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://w3.blackpool.gov.uk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://wms.derbyshire.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://www.southampton.gov.uk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United Kingdom", "gb"),
+    ("https://gpv0.napr.gov.ge/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Georgia", "ge"),
+    ("https://nv.napr.gov.ge/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Georgia", "ge"),
+    ("https://ghanageoportal.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ghana", "gh"),
+    ("http://download.geoportal.gov.gi/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Gibraltar", "gi"),
+    ("https://gis.govmin.gl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greenland", "gl"),
+    ("http://3.23.95.209/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Gambia", "gm"),
+    ("http://geoportal.ypen.gr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://gis.cityofathens.gr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://gis.thessaloniki.gr/geoserver/ows", "Greece", "gr"),
+    ("http://maps.msp-greece.eu/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://mapsportal.ypen.gr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://services.halandri.gr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://services.opendatacorfu.gr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://services.opendataepirus.gr/geoserver/ows", "Greece", "gr"),
+    ("http://ypendev2.cfserver3.net/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("https://beta.gis.cityofathens.gr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("https://geoportal.ermis-f.eu/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("https://geoserver.ims.forth.gr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greece", "gr"),
+    ("https://services.chalandri.gr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greece", "gr"),
+    ("https://services.heraklion.gr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Greece", "gr"),
+    ("https://thalchor-2.ypen.gov.gr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Greece", "gr"),
+    ("http://ideg.segeplan.gob.gt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Guatemala", "gt"),
+    ("https://portal.ric.gob.gt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Guatemala", "gt"),
+    ("https://www.geoportal.marn.gob.gt:8080/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Guatemala", "gt"),
+    ("https://maps.nre.gov.gy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Guyana", "gy"),
+    ("http://geonode.copeco.gob.hn/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Honduras", "hn"),
+    ("http://geoserver.icf.gob.hn/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Honduras", "hn"),
+    ("https://geonode.ine.gob.hn/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Honduras", "hn"),
+    ("https://mapassimpro.copeco.gob.hn/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Honduras", "hn"),
+    ("http://rgi.dgu.hr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Croatia", "hr"),
+    ("https://jisms.gospodarstvo.gov.hr/nipp/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Croatia", "hr"),
+    ("https://nipp.hzinfra.hr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Croatia", "hr"),
+    ("https://stgo.dgu.hr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Croatia", "hr"),
+    ("https://haitidata.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Haiti", "ht"),
+    ("http://geonetwork.mfgi.hu:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Hungary", "hu"),
+    ("http://geoserver.inspire.fomi.hu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Hungary", "hu"),
+    ("http://agamkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://anambaskab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://balangankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://baliprov.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bandungkota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banggaikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banggaikep.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banggailautkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banjarkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banjarkota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banjarmasinkota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://banyuwangikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://baritokualakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://baritoselatankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bekasikota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bengkaliskab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bengkayangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bengkuluprov.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bimakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://bondowosokab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://ciamiskab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://cianjurkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://cimahikota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://cirebonkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://cirebonkota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://demakkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://dharmasrayakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://dumaikota.ina-sdi.or.id/geoserver/wfs", "Indonesia", "id"),
+    ("http://empatlawangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://enrekangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://fakfakkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://fp2.menlhk.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://garutkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.babelprov.go.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.banjarbarukota.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.bantulkab.go.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.banyumaskab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.batangkab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.bekasikab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.boyolali.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.jambikota.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.jatengprov.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.jogjaprov.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kaltaraprov.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kalteng.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kebumenkab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kemenperin.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kolakakab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kolakatimurkab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kuburayakab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.kuduskab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.lebongkab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.manadokota.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.mojokertokota.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.natunakab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.ntbprov.go.id:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.okutimurkab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.palembang.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.papua.go.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.pemkomedan.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.penajamkab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.purworejokab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.riau.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.sumbawakab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.sumselprov.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.tabalongkab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.temanggungkab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geoportal.tulungagung.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://geospasial.kalbarprov.go.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://gresikkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://grobogankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://halmaherautarakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://hulusungaitengahkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://indragirihilirkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://indragirihulukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://indramayukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://jambiprov.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://jayapurakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://jemberkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://jigd.pangandarankab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://jombangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kaimanakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kamparkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kapuashulukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://karawangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kayongutarakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kepriprov.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kepulauansulakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://ketapangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kotabaru.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kotatanjungpinang.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kotawaringinbaratkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://kuningankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://labuhanbatukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://lahatkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://lamongankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://lampungbaratkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://landakkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://lebakkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://limapuluhkotakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://lubuklinggaukota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://lumajangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://luwutimurkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://madiunkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://magetankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://majalengkakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://malangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://maluku.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://malukuutara.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://mamujutengahkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://manokwarikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://manselkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://melawikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://mempawahkab.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://metrokota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://musirawaskab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://nagekeokab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://nganjukkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://ngawikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://nttprov.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://oganilirkab.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://ogankomeringulukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://okuselatankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://padanglawasutarakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://padangpariamankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://palangkarayakota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://palukota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pamekasankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pariamankota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://paserkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pasuruankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pesisirbaratkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pgis.blitarkab.go.id:8080/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pidiekab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://polewalimandarkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://ponorogokab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://pontianakkota.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://purwakartakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://rajaampatkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sabangkota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sambaskab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sanggaukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sawahluntokota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sekadaukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://serambigeoportal.padangpanjang.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://siakkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sidrapkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sigikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sintangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://situbondokab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://solokkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sorongkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://subangkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sukabumikab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://sulbarprov.ina-sdi.or.id:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tanahbumbukab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tanahlautkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tapselkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tarakankota.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tasikmalayakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tojounaunakab.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://trenggalekkab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://tubankab.ina-sdi.or.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://waykanan.ina-sdi.or.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://atlas.atrbpn.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geodata.bandung.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geonode.bantulkab.go.id/geoserver/ows", "Indonesia", "id"),
+    ("https://geonode.folunc-id.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geonode.nodc.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.asahankab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.beraukab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.bukittinggikota.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.bulukumbakab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.deliserdangkab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.kominfo.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.kotimkab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.kulonprogokab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.langkatkab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.magelangkab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.magelangkota.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.mubakab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.pareparekota.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.purbalinggakab.go.id/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.slemankab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://geoportal.sultengprov.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://gis.blitarkab.go.id/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://jigd.kaltimprov.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://pisda.sukoharjokab.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://portal.sitarung.win/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Indonesia", "id"),
+    ("https://simtaru.papua.go.id/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Indonesia", "id"),
+    ("http://eutgn.marine.ie/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ireland", "ie"),
+    ("https://gis-int.epa.ie/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Ireland", "ie"),
+    ("https://gis-stg.epa.ie/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Ireland", "ie"),
+    ("https://gis-test.epa.ie/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Ireland", "ie"),
+    ("https://www.floodinfo.ie/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Ireland", "ie"),
+    ("https://bhuvan-vec3.nrsc.gov.in/bhuvan/ows?service=WFS&version=1.0.0&request=GetCapabilities", "India", "in"),
+    ("https://geosadak-pmgsy.nic.in:8080/ows?service=WFS&version=1.0.0&request=GetCapabilities", "India", "in"),
+    ("https://geoserver.dx.geospatial.org.in/stac/wfs", "India", "in"),
+    ("https://geoserver.ts.adex.org.in/stac/wfs", "India", "in"),
+    ("https://tngis.tn.gov.in/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "India", "in"),
+    ("https://iransdi.ncc.gov.ir/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Iran", "ir"),
+    ("http://gagnaveita.vegagerdin.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("http://vefsja.skjalasafn.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://geo.vedur.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://geoserver.mast.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://gis.fasteignaskra.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://gis.hafogvatn.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://gis.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://gis.lmi.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("https://thjonustukort.is/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Iceland", "is"),
+    ("http://geonode.supportopcveneto.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("http://geoserver.comune.fano.pu.it:8090/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://geoserver.comune.prato.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://geoserver.protezionecivile.fvg.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://geoservices.retecivica.bz.it/geoserver/ows", "Italy", "it"),
+    ("http://mappe.provincia.teramo.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("http://microzonazione.regione.basilicata.it:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://ows.provinciatreviso.it:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://pubblicazioni.cittametropolitana.fi.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://sdi.isprambiente.it:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://sit.cittametropolitana.na.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://wgmatera.paesit.it/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Italy", "it"),
+    ("http://www.silvenezia.it:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://app.geonue.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://atlad.geoportale.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://cigno.atlantedellalaguna.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://decimetro.cittametropolitana.mi.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://demo-geoservices8.civis.bz.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://gaia.arpa.veneto.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geomap.arpa.veneto.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geonode.provincia.treviso.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoportale.comune.roma.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoportale.comunedisanremo.it/geoserver-next/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoportale.lamma.rete.toscana.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoportale.regione.lazio.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geosdi.geodatalab.cloud/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoserver.comune.modena.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoserver.comune.re.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoservices.buergernetz.bz.it/geoserver/ows", "Italy", "it"),
+    ("https://geoservices1.civis.bz.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoservices6.civis.bz.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://geoservizi.regione.vda.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://gisserver.territorio.csi.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://idrogeo.isprambiente.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://idt2-geoserver.regione.veneto.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://reportdu.nnb.isprambiente.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://serviziogc.regione.fvg.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://sgi2.isprambiente.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://sit2.regione.campania.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://staging.webgis.adbpo.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://webgis.regione.sardegna.it/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Italy", "it"),
+    ("https://www.atlantedellalaguna.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("https://www.geonode.nnb.isprambiente.it/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Italy", "it"),
+    ("http://gissv03.pref.nagasaki.jp/geoserver/ows", "Japan", "jp"),
+    ("https://portal.msp.go.ke/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Kenya", "ke"),
+    ("https://geonode.water.gov.kg/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Kyrgyzstan", "kg"),
+    ("http://lxgis.jeonju.go.kr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("http://service.kosha.or.kr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("https://bigdata.dongjak.go.kr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("https://floodmap.go.kr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("https://geo.safemap.go.kr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("https://gis.bdna.or.kr:4443/ows?service=WFS&version=1.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("https://weather.go.kr/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "South Korea", "kr"),
+    ("http://geo.eatyrau.kz/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Kazakhstan", "kz"),
+    ("https://geopavlodar.kz/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Kazakhstan", "kz"),
+    ("https://geoportal.akt.kz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Kazakhstan", "kz"),
+    ("https://map.gov.kz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Kazakhstan", "kz"),
+    ("https://dmhlao.la/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Laos", "la"),
+    ("https://virgo.mpwt.gov.la/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Laos", "la"),
+    ("https://spims.moe.gov.lb/geoserver/web/wfs", "Lebanon", "lb"),
+    ("https://geoservices.govt.lc/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Saint Lucia", "lc"),
+    ("http://www.mebin.nara.ac.lk/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Sri Lanka", "lk"),
+    ("https://geoserver.kaunas.lt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Lithuania", "lt"),
+    ("https://www.inspire-geoportal.lt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Lithuania", "lt"),
+    ("https://wms.inspire.geoportail.lu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Luxembourg", "lu"),
+    ("https://wms.staging.inspire.geoportail.lu/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Luxembourg", "lu"),
+    ("https://geoserver.lvgmc.lv/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Latvia", "lv"),
+    ("https://ims-web.vvd.gov.lv/geoserver/web/wfs", "Latvia", "lv"),
+    ("https://is.mantojums.lv/geoserver/web/wfs", "Latvia", "lv"),
+    ("https://tapis.gov.lv/izpl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Latvia", "lv"),
+    ("http://geodata.gov.md/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Moldova", "md"),
+    ("http://oikumena.md:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Moldova", "md"),
+    ("https://map.cadastru.md/geoserver/ows", "Moldova", "md"),
+    ("https://geoportal.bar.me:8081/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Montenegro", "me"),
+    ("https://onlinegis.cedis.me/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Montenegro", "me"),
+    ("https://razvojgis.cedis.me/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Montenegro", "me"),
+    ("https://protectedareas.mg/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Madagascar", "mg"),
+    ("https://www.resiliencemada.gov.mg/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Madagascar", "mg"),
+    ("http://map.cuk.gov.mk:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Republic of North Macedo", "mk"),
+    ("http://eic.mn:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Mongolia", "mn"),
+    ("https://geo.nsdi.gov.mn/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Mongolia", "mn"),
+    ("http://pfni-ce.mr/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mauritania", "mr"),
+    ("https://msdi.data.gov.mt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Malta", "mt"),
+    ("https://geoportal.govmu.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mauritius", "mu"),
+    ("https://www.masdap.mw/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Malawi", "mw"),
+    ("http://geo.datos.jalisco.gob.mx/geoserver/wfs", "Mexico", "mx"),
+    ("http://geoinfo.iplaneg.net/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("http://geonode.conabio.gob.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://congreso2021.iplaneg.net/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://geonode.idegeo.centrogeo.org.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://geonode.implancmty.geoint.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://geonode.matiko.centrogeo.org.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://geonode.sgg.geoint.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://geonode.spotmet.geoint.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://geonode.tlalpan.geoint.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://sieg.cdmx.gob.mx/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://sisplade.geoint.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://www.geomexicali.info/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("https://www.sqnodo.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mexico", "mx"),
+    ("http://ismp.water.gov.my/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Malaysia", "my"),
+    ("http://skips.jupem.gov.my:82/geoserver/ows", "Malaysia", "my"),
+    ("https://mymaps.mygeoportal.gov.my/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Malaysia", "my"),
+    ("https://madico.terrafirma.co.mz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Mozambique", "mz"),
+    ("https://data.nigeriase4all.gov.ng/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Nigeria", "ng"),
+    ("https://geoserver.grid-nigeria.org/geoserver/wfs", "Nigeria", "ng"),
+    ("https://mapserverprivado.ineter.gob.ni/geoserver/wfs", "Nicaragua", "ni"),
+    ("http://geo.iszf.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("http://geo.sudwestfryslan.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("http://geodata.rivm.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("http://geoserver.nieuwegein.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("http://inspire.rivm.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("http://services.geodataoverijssel.nl:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://data-wior-amsterdam.webgis.nl/ows", "Netherlands", "nl"),
+    ("https://data.haarlem.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://datalab.alkmaar.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geo.drenthe.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("https://geo.ede.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geo.koggenland.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("https://geo.rijkswaterstaat.nl/services/ogc/gdr/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geo.vggm.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geo2.flevoland.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("https://geodata.utrecht.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geodata.zuid-holland.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geoserver-almereinkaart.webgispublisher.nl/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geoserver-productie.webgispublisher.nl/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geoserver.gelderland.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geoserver.waalwijk.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://geoservices.portaalnatuurenlandschap.nl/geoserver/gwc/service/tms/1.0.0/wfs", "Netherlands", "nl"),
+    ("https://geoweb.amstelveen.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("https://gnlufosrv02.kaartviewer.nl:8444/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://ihm-pub.geopublisher.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://inspire.caris.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://maps-intern.zaanstad.gem.local/geoserver/ows", "Netherlands", "nl"),
+    ("https://maps.groningen.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://maps.vlaardingen.nl/geoserver/ows", "Netherlands", "nl"),
+    ("https://maps.zaanstad.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://maps1.klimaatatlas.net/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://ogcgeo.zwemwater.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://opendata.hunzeenaas.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://opengeodata.zeeland.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://plattegronden.gooisemeren.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("https://projectgeodata.zeeland.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://rvo.b3p.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://services.geodata-utrecht.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://services.rce.geovoorziening.nl/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://waddinxveen.kaartviewer.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://waterveiligheidsportaal.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://wmsonly-services.geodataoverijssel.nl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Netherlands", "nl"),
+    ("https://www.wibon-inspire.nl/geoserver/ows", "Netherlands", "nl"),
+    ("https://www.wion-inspire.nl/geoserver/wfs", "Netherlands", "nl"),
+    ("http://geo.ngu.no/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Norway", "no"),
+    ("http://wms.dirnat.no/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Norway", "no"),
+    ("https://geoserver.barentswatch.no/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Norway", "no"),
+    ("https://kart.hi.no/data/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Norway", "no"),
+    ("https://kart.miljodirektoratet.no/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Norway", "no"),
+    ("http://geoportal.ntnc.org.np/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Nepal", "np"),
+    ("https://admin.nationalgeoportal.gov.np/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Nepal", "np"),
+    ("https://database.ntb.gov.np/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Nepal", "np"),
+    ("https://nationalgeoportal.gov.np/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Nepal", "np"),
+    ("https://data.codc.govt.nz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "New Zealand", "nz"),
+    ("https://data.otodc.govt.nz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "New Zealand", "nz"),
+    ("https://data.wairoadc.govt.nz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "New Zealand", "nz"),
+    ("https://gs.niwa.co.nz/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "New Zealand", "nz"),
+    ("https://geo-01.innovacion.gob.pa/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Panama", "pa"),
+    ("https://geonode.mupa.gob.pa/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Panama", "pa"),
+    ("http://geo.ceplan.gob.pe:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Peru", "pe"),
+    ("http://geo.munisanisidro.gob.pe:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Peru", "pe"),
+    ("http://geo.sernanp.gob.pe/geoserver/ows", "Peru", "pe"),
+    ("http://ider.regionhuanuco.gob.pe/geoserver/ows", "Peru", "pe"),
+    ("http://mtcgeo2.mtc.gob.pe:8080/geoserver/ows", "Peru", "pe"),
+    ("https://estadoconservacion.sernanp.gob.pe/geoserver/ows", "Peru", "pe"),
+    ("https://geoserver.miraflores.gob.pe:8443/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Peru", "pe"),
+    ("https://geoservicios.cultura.gob.pe/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Peru", "pe"),
+    ("https://sdmr.inei.gob.pe/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Peru", "pe"),
+    ("https://luims.dlpp.gov.pg/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Papua New Guinea", "pg"),
+    ("https://png-geoportal.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Papua New Guinea", "pg"),
+    ("http://crisp.r10.denr.gov.ph/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Philippines", "ph"),
+    ("https://geonode.tagabukid.net/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Philippines", "ph"),
+    ("https://geoserver.bukidnon.gov.ph/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Philippines", "ph"),
+    ("https://geoserver.geoportal.gov.ph/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "Philippines", "ph"),
+    ("https://rgin.rdc1.gov.ph/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Philippines", "ph"),
+    ("https://rgin.rdc9.gov.ph/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Philippines", "ph"),
+    ("https://www.carmonagis.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Philippines", "ph"),
+    ("http://sit-mapa.tarnowskiegory.pl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Poland", "pl"),
+    ("http://usip-kielce.e-swietokrzyskie.pl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Poland", "pl"),
+    ("http://usip.e-swietokrzyskie.pl/geoserver/wms/wfs", "Poland", "pl"),
+    ("http://wms2.geopoz.poznan.pl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Poland", "pl"),
+    ("https://iip.ekoportal.gov.pl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Poland", "pl"),
+    ("https://sip.um.swidnica.pl/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Poland", "pl"),
+    ("https://geoportal.nsdi.ps/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Palestine", "ps"),
+    ("http://geo.sigamcb.pt:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://geos.ccdrc.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://geoservices.dgadr.pt:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://igdrem.madeira.gov.pt/geoserver/wfs", "Portugal", "pt"),
+    ("http://mapas.hidrografico.pt:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://prototipo-catalogo.ipma.pt:80/geoserver/wfs", "Portugal", "pt"),
+    ("http://si.icnf.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://sig.cm-terrasdebouro.pt/geoserver21/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://sigmealhada.cm-mealhada.pt/geoMealhada/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("http://wssiglrec.azores.gov.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://geo2.dgterritorio.gov.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://geoserver.sig.cm-agueda.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://geoservices.madeira.gov.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://inspire.ine.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://sig-altotamega.pt/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://sigweb.cmnordeste.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://webgeo1.hidrografico.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://webgeo2.hidrografico.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://webgeo5.hidrografico.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://wssiga.azores.gov.pt/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Portugal", "pt"),
+    ("https://geonode.ine.gov.py/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Paraguay", "py"),
+    ("https://geoportal.paraguay.gov.py/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Paraguay", "py"),
+    ("http://imdroflood.meteoromania.ro:8080/geoserver/ows", "Romania", "ro"),
+    ("https://geo.salt.gov.ro/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Romania", "ro"),
+    ("https://inspire.igr.ro/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Romania", "ro"),
+    ("https://sitgorjnv.ro:8443/geoserver/ows", "Romania", "ro"),
+    ("https://fis.upravazasume.gov.rs/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Serbia", "rs"),
+    ("http://geo.ferhri.ru:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("http://geoportal.rgis.rk.gov.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("http://gisa.aari.ru:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://fires.dvinaland.ru/geoserver/ows", "Russian Federation", "ru"),
+    ("https://fpd.lenobl.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://geoportal.gov39.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://geoserver.geo.gov35.ru/geoserver/geo/wfs", "Russian Federation", "ru"),
+    ("https://gs2.rgis.spb.ru/geoserver/gwc/service/tms/1.0.0/wfs", "Russian Federation", "ru"),
+    ("https://investmapapi.economy.gov.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://map.vbglenobl.ru/GISWebServiceSE/service.php?SERVICE=WFS&REQUEST=GetCapabilities", "Russian Federation", "ru"),
+    ("https://mnp.economy.gov.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://nspd.rosreestr.gov.ru/api/wfs/v2?SERVICE=WFS&REQUEST=GetCapabilities", "Russian Federation", "ru"),
+    ("https://pub.fgislk.gov.ru/plk/geoservermaster/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://rgis71.tularegion.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://transport.mos.ru/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Russian Federation", "ru"),
+    ("https://geohazards.rtda.gov.rw/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Rwanda", "rw"),
+    ("https://www.geoportal.rwb.rw/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Rwanda", "rw"),
+    ("https://geoserver-apia.sprep.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Solomon Islands", "sb"),
+    ("http://epub.sjv.se/inspire/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("http://gi.karlstad.se:8080/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://arcticsdi.lm.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://daim.lfv.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://geodata.scb.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://geonode.folkhalsomyndigheten.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://karta.enkoping.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://karta.hallstahammar.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://karta.miljoforvaltningen.goteborg.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://karta.sigtuna.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://nvgis.naturvardsverket.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://stationsregister.miljodatasamverkan.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://stationsregistertest.miljodatasamverkan.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://www.malardalskartan.se/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Sweden", "se"),
+    ("https://geoserver.geo-zs.si/GeoZS_Superficial_Geology/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovenia", "si"),
+    ("https://gis.arso.gov.si/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovenia", "si"),
+    ("https://prostor.zgs.gov.si/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovenia", "si"),
+    ("http://inspire.biomonitoring.sk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("http://maps.geop.sazp.sk:80/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("https://geo.shmu.sk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("https://geopresovregion.sk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("https://geos.sazp.sk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("https://gisgeo.zsr.sk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("https://www.geoportalksk.sk/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Slovakia", "sk"),
+    ("https://georisques.sec.gouv.sn/geoserver-prod/web/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Senegal", "sn"),
+    ("http://geoportalofhargeisa.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Somalia", "so"),
+    ("https://geodatarisk.tg/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Togo", "tg"),
+    ("https://sig-anpc.switch-maker.net/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Togo", "tg"),
+    ("http://bpt.dol.go.th:8088/geoserver/ows", "Thailand", "th"),
+    ("http://gis.rid.go.th/geoserver/ows", "Thailand", "th"),
+    ("http://portal.dol.go.th/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Thailand", "th"),
+    ("http://simahosot.onep.go.th/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Thailand", "th"),
+    ("http://tile.gistda.or.th/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Thailand", "th"),
+    ("http://wms.nso.go.th/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://change2.gistda.or.th/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://geo.dla.go.th/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://geonode.envilink.go.th/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://gis.labour.go.th/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://portal.gfms.gistda.or.th/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://portal.marineportal.gistda.or.th/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://portal2.marineportal.gistda.or.th/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Thailand", "th"),
+    ("https://tcs.dmcr.go.th/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Thailand", "th"),
+    ("http://maps.wis.tj:555/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Tajikistan", "tj"),
+    ("http://www.onagri.tn/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Tunisia", "tn"),
+    ("http://cbs.yalova.bel.tr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Turkey", "tr"),
+    ("http://veri.tarimorman.gov.tr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Turkey", "tr"),
+    ("https://acikyesil.bursa.bel.tr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Turkey", "tr"),
+    ("https://cbsservis.uab.gov.tr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Turkey", "tr"),
+    ("https://geoserver.trabzon.bel.tr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Turkey", "tr"),
+    ("https://ivmegeoserver.afad.gov.tr/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Turkey", "tr"),
+    ("http://tchgis.tainan.gov.tw:8080/geoserver/web/wfs", "Taiwan", "tw"),
+    ("https://eland.cpami.gov.tw/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Taiwan", "tw"),
+    ("https://geonode.resilienceacademy.ac.tz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Tanzania", "tz"),
+    ("https://geonode.tarurapcugeodata.or.tz/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Tanzania", "tz"),
+    ("https://geonode.nema.go.ug/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Uganda", "ug"),
+    ("http://geoserver2.pr.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("http://landscapeportal.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United States", "us"),
+    ("http://www.vdotdatasharing.org/sitemap.xml/wfs", "United States", "us"),
+    ("https://chocofair.dev/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United States", "us"),
+    ("https://data.howardcountymd.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("https://geonode.ggcity.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United States", "us"),
+    ("https://geonode.imperialbeachca.gov/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United States", "us"),
+    ("https://geonode.state.gov/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United States", "us"),
+    ("https://geoplatform.spacesur.com/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "United States", "us"),
+    ("https://geoserver.geoplatform.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("https://gis.fema.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("https://opengeo.ncep.noaa.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("https://www.mrlc.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("https://www.sciencebase.gov/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "United States", "us"),
+    ("http://geoserver.montevideo.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://durazno.gvsigonline.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://geoserver.miem.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://geoserver.opp.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://geoserver.snia.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://geoservicios.mtop.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://gs.igm.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://mapas.mides.gub.uy/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Uruguay", "uy"),
+    ("https://geoserver.mppp.gob.ve/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Venezuela (Bolivarian Re", "ve"),
+    ("https://mapas.alcaldiademaracaibo.org/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Venezuela (Bolivarian Re", "ve"),
+    ("http://portal.hcmgis.vn/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Vietnam", "vn"),
+    ("https://congbo.dulieuvientham.gov.vn/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Vietnam", "vn"),
+    ("https://geodata-stnmt.tphcm.gov.vn/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Vietnam", "vn"),
+    ("https://map.tnmtgialai.gov.vn/ows?service=WFS&version=1.0.0&request=GetCapabilities", "Vietnam", "vn"),
+    ("https://opendata.hcmgis.vn/geoserver/web/wfs", "Vietnam", "vn"),
+    ("https://geonode.gov.vu/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "Vanuatu", "vu"),
+    ("http://146.118.96.76/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "World", "world"),
+    ("http://190.112.43.34/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "World", "world"),
+    ("http://192.168.210.58/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "World", "world"),
+    ("http://196.45.37.197/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "World", "world"),
+    ("http://202.154.182.164:8080/geoserver/wfs", "World", "world"),
+    ("http://213.165.151.135/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities", "World", "world"),
+    ("http://geo-spatial.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "World", "world"),
+    ("http://geo4.vic-metria.nu:80/geoserver/wfs", "World", "world"),
+    ("http://geoserver.prosmap.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "World", "world"),
+    ("http://sirei.pariis.net:8000/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "World", "world"),
+    ("https://rsistest.ramsar.org/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "World", "world"),
+    ("https://seagrass.observing.earth/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "World", "world"),
+    ("https://sigpobla.gvsigonline.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "World", "world"),
+]
+_WFS_KEEP = _re.compile(
+    r"permit|planning|develop|construct|mining|\bmine\b|quarr|pipeline|concession|"
+    r"infrastructur|\bproject|licen[cs]e|environ|impact|land ?use|zoning|cadastr|"
+    r"obra|proyecto|miner|licencia|concesi|urbanism|catastro|ambient|ordenamiento|"
+    r"licenciamento|empreendimento|minera|permis|amenagement|chantier|carri\u00e8re|"
+    r"exploitation|baugen|genehmig|planung|bergbau|umwelt|vorhaben|"
+    r"wind ?farm|offshore|hydrocarbon|dredg|aggregate extraction|"
+    r"izin|tambang|pembangunan|amdal|tata ?ruang|lingkungan|"
+    r"cava|miniera|ambientale|urbanistica|edilizia|vergunning|bouw|ontwikkel|mijnbouw",
+    _re.I)
+
+def _wfs_typenames(xmltext):
+    try:
+        root = _ET.fromstring(xmltext)
+    except Exception:
+        return []
+    out = []
+    for ft in root.iter():
+        if ft.tag.rsplit("}", 1)[-1] != "FeatureType":
+            continue
+        nm = ti = None
+        for ch in ft:
+            ln = ch.tag.rsplit("}", 1)[-1]
+            if ln == "Name":
+                nm = (ch.text or "").strip()
+            elif ln == "Title":
+                ti = (ch.text or "").strip()
+        if nm:
+            out.append((nm, ti or nm))
+    return out
+
+def _wfs_get(url, limit_bytes=3000000, timeout=45):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(limit_bytes).decode("utf-8", "replace")
+
+def fetch_wfs_federation(per_endpoint=None, per_ds=900):
+    per_endpoint = per_endpoint or (10 if os.environ.get("HARVEST_FEDERATIONS") == "1" else 6)
+    out = []
+    budget_min = _fed_budget("WFS_BUDGET_MIN", 40, 80)
+    t_end = time.time() + budget_min * 60
+    _wfs_eps = _shard_list(_WFS_ENDPOINTS)
+    for (url, country, cc) in _wfs_eps:
+        if time.time() > t_end:
+            _flag("wfs federation hit %d-min budget -- %d endpoints not reached" %
+                  (budget_min, len(_wfs_eps) - _wfs_eps.index((url, country, cc))))
+            break
+        base = url.split("?")[0]
+        sep = "&" if "?" in base else "?"
+        try:
+            cap = _wfs_get(base + sep + "service=WFS&version=1.1.0&request=GetCapabilities")
+        except Exception:
+            continue
+        layers = [(n, t) for (n, t) in _wfs_typenames(cap) if _WFS_KEEP.search(t) or _WFS_KEEP.search(n)]
+        got = 0
+        for nm, ti in layers:
+            if got >= per_endpoint:
+                break
+            gj = None
+            for ofmt in ("application/json", "geojson"):   # GeoServer vs MapServer/deegree
+                try:
+                    gu = base + sep + urllib.parse.urlencode(
+                        {"service": "WFS", "version": "1.1.0", "request": "GetFeature",
+                         "typeName": nm, "outputFormat": ofmt, "maxFeatures": per_ds})
+                    gj = json.loads(_wfs_get(gu, limit_bytes=8000000))
+                    break
+                except Exception:
+                    continue
+            if gj is None:
+                continue
+            feats = gj.get("features") if isinstance(gj, dict) else None
+            if not feats:
+                continue
+            got += 1
+            n0 = len(out)
+            for f in feats[:per_ds]:
+                try:
+                    ll = _geom_center(f.get("geometry") or {})
+                    if not ll:
+                        continue
+                    props = f.get("properties") or {}
+                    st = _ods_pick(props, _ODS_STATUSK)
+                    sn = str(st or "").lower().replace("_", " ")
+                    if any(k in sn for k in _ODS_DEAD):
+                        continue
+                    nmv = _ods_pick(props, _ODS_NAMEK) or ti
+                    p = {"name": nmv[:140], "type": "Geospatial dataset (%s)" % country,
+                         "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                         "precise": True, "size": "", "status": st[:40], "company": "",
+                         "url": base, "desc": "From %s spatial data (WFS) \u00b7 %s." % (country, ti[:60]),
+                         "source": "wfs_%s" % cc}
+                    p["impact"] = rate_project(p, sensitivity=0)
+                    out.append(p)
+                except Exception:
+                    continue
+            if len(out) > n0:
+                print("  wfs %s: +%d from '%s'" % (country, len(out) - n0, ti[:40]))
+            time.sleep(0.2)
+    print("  wfs federation: %d points from %d endpoints" % (len(out), len(_WFS_ENDPOINTS)))
+    return out
+
+
+# ========================= OGC API - Features federation =========================
+# OGC API - Features (verified against ogcapi-workshop.ogc.org & pygeoapi docs):
+#   GET {base}/collections?f=json -> {"collections":[{"id":..,"title":..}]}
+#   GET {base}/collections/{id}/items?limit=N&f=json -> GeoJSON FeatureCollection (CRS84).
+# JSON-native successor to WFS; catches pygeoapi servers that expose no WFS. Gov supply
+# is thin and weather/EO-heavy -- the dev/permit/mining keyword filter drops those to 0.
+_OGCAPI_ENDPOINTS = [
+    ("https://api.weather.gc.ca", "Canada", "ca"),
+    ("https://betageo.woudc.org/oapi", "Canada", "ca"),
+    ("https://wis2-gdc.weather.gc.ca", "Canada", "ca"),
+    ("https://api.geo.bs.ch/stac/v1", "Switzerland", "ch"),
+    ("https://opendataapi.dmi.dk/v1/forecastdata/api", "Denmark", "dk"),
+    ("https://api-coverages.idee.es", "Spain", "es"),
+    ("https://api-features.idee.es", "Spain", "es"),
+    ("https://api-features.ign.es", "Spain", "es"),
+    ("https://api-maps.idee.es", "Spain", "es"),
+    ("https://api.geosas.fr/rpg", "France", "fr"),
+    ("https://api.gis.cityofathens.gr/pygeoapi", "Greece", "gr"),
+    ("https://sealevelrise.kartverket.no", "Norway", "no"),
+    ("https://ogcapi.dgterritorio.gov.pt", "Portugal", "pt"),
+    ("https://astrogeology.usgs.gov/pygeoapi", "United States", "us"),
+    ("https://geoapi.geoplatform.gov", "United States", "us"),
+    ("https://labs.waterdata.usgs.gov/api/nldi/pygeoapi", "United States", "us"),
+    ("https://wis2node.globaldata.nws.noaa.gov", "United States", "us"),
+    ("https://wis2.dwd.de/gdc", "World", "world"),
+]
+
+def fetch_ogcapi_federation(per_endpoint=6, per_ds=600):
+    out = []
+    budget_min = _fed_budget("OGCAPI_BUDGET_MIN", 10, 10)
+    t_end = time.time() + budget_min * 60
+    _oapi_eps = _shard_list(_OGCAPI_ENDPOINTS)
+    for (base, country, cc) in _oapi_eps:
+        if time.time() > t_end:
+            _flag("ogcapi federation hit %d-min budget -- %d endpoints not reached" %
+                  (budget_min, len(_oapi_eps) - _oapi_eps.index((base, country, cc))))
+            break
+        root = base.rstrip("/")
+        try:
+            cj = _get_json(root + "/collections?f=json")
+        except Exception:
+            continue
+        colls = (cj or {}).get("collections") or []
+        matched = []
+        for c in colls:
+            cid = c.get("id") or c.get("name")
+            title = str(c.get("title") or cid or "")
+            if cid and (_WFS_KEEP.search(title) or _WFS_KEEP.search(str(cid))):
+                matched.append((cid, title))
+        got = 0
+        for cid, title in matched[:per_endpoint]:
+            try:
+                iu = root + "/collections/%s/items?%s" % (
+                    urllib.parse.quote(str(cid)),
+                    urllib.parse.urlencode({"limit": per_ds, "f": "json"}))
+                gj = _get_json(iu)
+            except Exception:
+                continue
+            feats = gj.get("features") if isinstance(gj, dict) else None
+            if not feats:
+                continue
+            got += 1
+            n0 = len(out)
+            for f in feats[:per_ds]:
+                try:
+                    ll = _geom_center(f.get("geometry") or {})
+                    if not ll:
+                        continue
+                    props = f.get("properties") or {}
+                    st = _ods_pick(props, _ODS_STATUSK)
+                    sn = str(st or "").lower().replace("_", " ")
+                    if any(k in sn for k in _ODS_DEAD):
+                        continue
+                    nm = _ods_pick(props, _ODS_NAMEK) or title
+                    p = {"name": nm[:140], "type": "Geospatial dataset (%s)" % country,
+                         "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
+                         "precise": True, "size": "", "status": st[:40], "company": "",
+                         "url": root, "desc": "From %s spatial data (OGC API) \u00b7 %s." % (country, title[:60]),
+                         "source": "ogcapi_%s" % cc}
+                    p["impact"] = rate_project(p, sensitivity=0)
+                    out.append(p)
+                except Exception:
+                    continue
+            if len(out) > n0:
+                print("  ogcapi %s: +%d from '%s'" % (country, len(out) - n0, title[:40]))
+            time.sleep(0.2)
+    print("  ogcapi federation: %d points from %d endpoints" % (len(out), len(_OGCAPI_ENDPOINTS)))
+    return out
+
+
+def fetch_ckan_federation(per_portal=None, per_ds=1500):
+    per_portal = per_portal or (10 if os.environ.get("HARVEST_FEDERATIONS") == "1" else 6)
+    out = []
+    budget_min = _fed_budget("CKAN_BUDGET_MIN", 75, 110)
+    t_end = time.time() + budget_min * 60
+    _ckan_portals = _shard_list(_CKAN_PORTALS)
+    for (base, country, cc) in _ckan_portals:
+        if time.time() > t_end:
+            _flag("ckan federation hit %d-min budget -- %d portals not reached" %
+                  (budget_min, len(_ckan_portals) - _ckan_portals.index((base, country, cc))))
+            break
+        pkgs = []; seen = set()
+        for term in _CKAN_TERMS[:30]:
             try:
                 u = base.rstrip("/") + "/api/3/action/package_search?" + urllib.parse.urlencode(
-                    {"q": term, "rows": 25})
+                    {"q": term, "rows": 100})
                 d = _get_json(u)
             except Exception:
                 continue
@@ -3563,6 +7164,17 @@ def fetch_ckan_federation(per_portal=3, per_ds=1500):
             if got >= per_portal: break
             geo = [r for r in (pk.get("resources") or [])
                    if str(r.get("format", "")).lower() in ("geojson", "json") and r.get("url")]
+            if not geo:                                   # CSV-only portal -> sniff lat/lng columns
+                csvs = [r for r in (pk.get("resources") or [])
+                        if str(r.get("format", "")).lower() == "csv" and r.get("url")]
+                for r in csvs[:1]:
+                    rows_csv = _fed_csv_points(r["url"], country, cc, "ckan_",
+                                               str(pk.get("title") or "Permit"), base, per_ds)
+                    if rows_csv:
+                        got += 1; out.extend(rows_csv)
+                        print("  ckan %s: +%d from CSV '%s'" % (country, len(rows_csv),
+                                                                str(pk.get("title"))[:40]))
+                    time.sleep(0.3)
             for r in geo[:1]:
                 try:
                     req = urllib.request.Request(r["url"], headers={"User-Agent": UA})
@@ -3602,6 +7214,7 @@ def fetch_ckan_federation(per_portal=3, per_ds=1500):
 
 
 def _finish(items):
+    _print_diagnostics()
     items = [p for p in items if p.get("lat") is not None and p.get("lng") is not None]
     items = dedup(items)
     items.sort(key=lambda p: -(p.get("impact") or 0))
@@ -3747,6 +7360,27 @@ def _osm_merge_parts():
     print("  merge: %d fresh + %d retained OSM sites" % (len(fresh), len(prior)))
     _finish(keep + fresh + prior)
 
+def _shard_list(lst):
+    """In a federation shard job (FED_SHARD=k, FED_SHARDS=n) each of the parallel
+    jobs takes every n-th entry of every portal list, so together the shards cover
+    100% of the portals in one scheduled run (mirrors the OSM tile shards)."""
+    sh = os.environ.get("FED_SHARD")
+    if sh is None or sh == "":
+        return lst
+    k = int(sh); n = int(os.environ.get("FED_SHARDS", "4"))
+    return [p for i, p in enumerate(lst) if i % n == k]
+
+_FED_PREFIXES = ("ckan_", "ods_", "geonode_", "dkan_", "udata_", "wfs_", "ogcapi_")
+def _is_fed(s):
+    return any(str(s).startswith(p) for p in _FED_PREFIXES)
+
+def _fed_budget(name, daily_default, fed_default):
+    """Budget minutes for a federation: big in the dedicated federations job,
+    small in the daily job (where federations only run as a fallback)."""
+    if os.environ.get(name):
+        return int(os.environ[name])
+    return fed_default if os.environ.get("HARVEST_FEDERATIONS") == "1" else daily_default
+
 def _carry_sources(pred, label):
     """Reuse entries already in projects.json for sources this run isn't refreshing."""
     try:
@@ -3783,11 +7417,60 @@ def main():
         items += _carry_sources(lambda s: s != "osm_construction", "daily sources")
         _finish(items)
         return
-    print("MODE: daily refresh (all sources except OSM)")
+    if os.environ.get("FED_MERGE") == "1":
+        print("MODE: merge federation shard parts")
+        import glob as _glob
+        items = []
+        for f in sorted(_glob.glob("fed_part_*.json")):
+            try:
+                items += json.load(open(f, encoding="utf-8"))
+                print("  merge: read %s" % f)
+            except Exception as e:
+                print("  merge: %s unreadable: %s" % (f, e))
+        if not items:
+            print("  merge: no shard data -- keeping prior federation entries")
+            items = _carry_sources(_is_fed, "prior federation sources")
+        items += _carry_sources(lambda s: not _is_fed(s), "non-federation sources")
+        _finish(items)
+        return
+    fsh = os.environ.get("FED_SHARD")
+    if fsh is not None and fsh != "":
+        k = int(fsh); n = int(os.environ.get("FED_SHARDS", "4"))
+        print("MODE: federation shard %d of %d" % (k, n))
+        os.environ["HARVEST_FEDERATIONS"] = "1"   # shard gets fed-mode budgets + depth
+        items = []
+        items += _run("ckan_federation", fetch_ckan_federation)
+        items += _run("ods_federation", fetch_ods_federation)
+        items += _run("geonode_federation", fetch_geonode_federation)
+        items += _run("dkan_federation", fetch_dkan_federation)
+        if k == 0:
+            items += _run("udata_federation", fetch_udata_federation)  # only 2 portals -- one shard
+        items += _run("wfs_federation", fetch_wfs_federation)
+        items += _run("ogcapi_federation", fetch_ogcapi_federation)
+        with open("fed_part_%d.json" % k, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, separators=(",", ":"))
+        print("wrote fed_part_%d.json with %d entries" % (k, len(items)))
+        return
+    if os.environ.get("HARVEST_FEDERATIONS") == "1":
+        # Dedicated federations job: refresh ONLY the 7 portal federations with big
+        # budgets (defaults sum to ~5.2h -- inside the 6h Actions job limit); keep
+        # every other source exactly as the daily job last wrote it.
+        print("MODE: federations refresh (dedicated job)")
+        items = []
+        items += _run("ckan_federation", fetch_ckan_federation)
+        items += _run("ods_federation", fetch_ods_federation)
+        items += _run("geonode_federation", fetch_geonode_federation)
+        items += _run("dkan_federation", fetch_dkan_federation)
+        items += _run("udata_federation", fetch_udata_federation)
+        items += _run("wfs_federation", fetch_wfs_federation)
+        items += _run("ogcapi_federation", fetch_ogcapi_federation)
+        items += _carry_sources(lambda s: not _is_fed(s), "non-federation sources")
+        _finish(items)
+        return
+    print("MODE: daily refresh (all sources except OSM + federations)")
     items = []
     items += _run("permitstack", fetch_permitstack)             # national construction permits (key)
     _SOCRATA_OFF = {"data.austintexas.gov", "data.sfgov.org", "data.lacity.org"}  # 400s; PermitStack covers these
-    items += _run("ckan_federation", fetch_ckan_federation)     # national CKAN portals worldwide
     items += _run("arcgis_hub", fetch_arcgis_hub)               # US city/county permits (no cap)
     items += _run("socrata_permits", lambda: [p for cfg in SOCRATA_CITIES
                                               if cfg.get("domain") not in _SOCRATA_OFF
@@ -3800,6 +7483,7 @@ def main():
     items += _run("arcgis_discovery", fetch_arcgis_discovered)            # auto-discovered ArcGIS permit services (capped, $5M-gated)
     items += _run("federal_register", fetch_federal_register)   # US EIS notices
     items += _run("public_land_nepa", fetch_public_land_nepa)   # BLM + USFS via Federal Register
+    items += _run("blm_arcgis", fetch_blm_arcgis)               # BLM ePlanning ArcGIS -- PRECISE open-comment NEPA points
     items += _run("ceqanet", fetch_ceqanet)                     # California CEQA/NEPA environmental filings (state clearinghouse)
     items += _run("wa_sepa", fetch_wa_sepa)                     # Washington State SEPA environmental-review filings
     items += _run("sitadel_fr", fetch_sitadel_fr)               # France national permits (automated)
@@ -3812,10 +7496,19 @@ def main():
     items += _run("portugal_eia", fetch_portugal_eia)              # Portugal national EIA processes (APA/SNIAmb)                   # Brazil federal environmental licences
     items += _run("chile_seia", fetch_chile_seia)                  # Chile SEIA -- major EIA projects under evaluation (SEA)
     items += _run("peru_senace", fetch_peru_senace)                # Peru SENACE -- major projects under environmental certification
+    items += _run("nsw_major", fetch_nsw_major)                    # Australia (NSW) State Significant / Major Projects register
+    items += _run("qld_coordinated", fetch_qld_coordinated)        # Australia (QLD) Coordinator-General coordinated projects
+    items += _run("bc_eao", fetch_bc_eao)                          # Canada (BC) Environmental Assessment Office EPIC projects
+    items += _run("sask_eia", fetch_sask_eia)                      # Canada (Saskatchewan) active EA projects + applications
+    items += _run("ireland_eia", fetch_ireland_eia)                # Ireland national EIA Location Point layer (CC-BY)
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
     items += _run("land_matrix", fetch_land_matrix)               # GLOBAL: large-scale land acquisitions (Land Matrix, country-level)
     items += _run("gem", fetch_gem)                               # GLOBAL: proposed fossil infra -- coal plants+mines, gas, oil (Global Energy Monitor, live)
+    # -- portal federations run in their OWN twice-weekly job (HARVEST_FEDERATIONS=1,
+    #    projects_federations.yml) with ~3x budgets + deeper per-portal caps; the daily
+    #    job just carries their last results forward, like OSM --
+    items += _carry_sources(_is_fed, "federation sources")
     items += _carry_sources(lambda s: s == "osm_construction", "osm_construction")
     _finish(items)
 
