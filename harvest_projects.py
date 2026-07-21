@@ -4154,6 +4154,90 @@ def _iso_date(v):
         pass
     return None
 
+
+def fetch_emodnet_wind():
+    """EU/EEA seas: offshore wind farms IN DEVELOPMENT, via the EMODnet Human
+    Activities WFS (ows.emodnet-humanactivities.eu, GeoServer; verified live
+    2026-07: GetFeature + outputFormat=application/json is the documented
+    pattern, EMODnet/Web-Service-Documentation on GitHub).
+    Status vocabulary (per EMODnet metadata record 8201070b): Approved, Planned,
+    Dismantled, Construction, Production, Test site (older releases: Authorised,
+    Operational, Under Construction).
+    IN-PROCESS GATE (fail-safe): keep ONLY planned/approved/authorised/
+    construction; anything else -- production, operational, dismantled, test
+    site, or unrecognized -- is dropped.
+    The exact WFS typeName is not documented on a stable page, so candidates are
+    probed; a miss is logged and the source returns 0 (per-source preservation
+    then protects the previous harvest)."""
+    base = ("https://ows.emodnet-humanactivities.eu/wfs?service=WFS&version=1.1.0"
+            "&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326"
+            "&typeName=%s")
+    ALLOW = ("planned", "approved", "authori", "construction")
+    BLOCK = ("production", "operational", "dismantl", "decommission", "test")
+    out = []
+    for layer in ("windfarms", "windfarmspoly", "emodnet:windfarms", "emodnet:windfarmspoly"):
+        try:
+            data = _get_json(base % urllib.parse.quote(layer))
+        except Exception as e:
+            print("  emodnet layer %s failed: %s" % (layer, e)); continue
+        feats = (data or {}).get("features") or []
+        if not feats:
+            print("  emodnet layer %s: no features" % layer); continue
+        kept = 0
+        for f in feats:
+            try:
+                pr = f.get("properties") or {}
+                st = str(pr.get("status") or pr.get("STATUS") or "").strip().lower()
+                if not st or any(b in st for b in BLOCK): continue
+                if not any(a in st for a in ALLOW): continue     # unrecognized -> excluded
+                g = f.get("geometry") or {}
+                lat = lng = None
+                if g.get("type") == "Point":
+                    lng, lat = g["coordinates"][0], g["coordinates"][1]
+                else:
+                    ring = g.get("coordinates")
+                    while ring and isinstance(ring[0], (list, tuple)) and isinstance(ring[0][0], (list, tuple)):
+                        ring = ring[0]
+                    if ring:
+                        xs = [p[0] for p in ring]; ys = [p[1] for p in ring]
+                        lng = sum(xs) / len(xs); lat = sum(ys) / len(ys)
+                if lat is None or lng is None: continue
+                mwf = None
+                try: mwf = float(pr.get("power_mw") or pr.get("POWER_MW"))
+                except Exception: pass
+                imp = 5 if (mwf and mwf >= 500) else 4 if (mwf and mwf >= 250) else 3 if (mwf and mwf >= 100) else 2
+                nt = pr.get("n_turbines")
+                out.append({
+                    "name": str(pr.get("name") or "Offshore wind farm").strip()[:120],
+                    "type": "Offshore wind farm", "status": st,
+                    "country": str(pr.get("country") or "").strip(),
+                    "state": (" \u00b7 " + str(pr.get("country")).strip()) if pr.get("country") else "",
+                    "size": ("%d MW" % int(mwf)) if mwf else ((str(nt) + " turbines") if nt else ""),
+                    "date": (str(pr.get("year") or pr.get("start") or "")[:10] or None),
+                    "lat": lat, "lng": lng, "impact": imp,
+                    "precise": g.get("type") == "Point",
+                    "desc": "Offshore wind farm in development \u2014 EMODnet Human Activities (EU seas marine-spatial data).",
+                    "url": "https://emodnet.ec.europa.eu/en/human-activities",
+                    "source": "emodnet_wind"})
+                kept += 1
+            except Exception:
+                continue
+        print("  emodnet %s: %d features, %d in development kept" % (layer, len(feats), kept))
+        if kept:
+            break   # first working layer wins; the other geometry layer would duplicate it
+    return out
+
+
+# HELD (at-sea, documented 2026-07): ISA deep-sea mining exploration-contract
+# areas -- the International Seabed Authority publishes contract-area geodata
+# (31 exploration contracts: 19 polymetallic-nodule incl. CCZ, 7 sulphide-ridge,
+# 5 cobalt-crust) through its DeepData GIS viewer (data.isa.org.jm/isa/map/),
+# but no machine-readable endpoint could be live-verified; the viewer is a
+# closed JS app and the shapefile catalogue sits behind it. Add the polygons
+# if/when an open WFS/ArcGIS/download endpoint is confirmed. The ISA registry
+# itself is linked on the map under International bodies.
+
+
 def _slim(p):
     """Trim each project for wire size: drop empty fields, round coords to ~11m,
     cap prose. 20k+ projects make every byte count for map load time."""
@@ -7375,11 +7459,23 @@ def _is_fed(s):
     return any(str(s).startswith(p) for p in _FED_PREFIXES)
 
 def _fed_budget(name, daily_default, fed_default):
-    """Budget minutes for a federation: big in the dedicated federations job,
-    small in the daily job (where federations only run as a fallback)."""
+    """Budget minutes for a federation. Explicit env var always wins. In the
+    dedicated federations job the budget is the fed_default; but when the job is
+    SHARDED (FED_SHARDS>1) each shard only handles 1/n of every portal list, so
+    its time budget is divided by the shard count (with a small floor) to keep
+    every shard well under the GitHub Actions 6-hour ceiling. In the daily job
+    federations run only as a fallback, on the smaller daily_default."""
     if os.environ.get(name):
         return int(os.environ[name])
-    return fed_default if os.environ.get("HARVEST_FEDERATIONS") == "1" else daily_default
+    if os.environ.get("HARVEST_FEDERATIONS") == "1":
+        try:
+            n = int(os.environ.get("FED_SHARDS", "1"))
+        except Exception:
+            n = 1
+        if n > 1:
+            return max(12, -(-fed_default // n))   # ceil-divide, floor 12 min
+        return fed_default
+    return daily_default
 
 def _carry_sources(pred, label):
     """Reuse entries already in projects.json for sources this run isn't refreshing."""
@@ -7438,17 +7534,36 @@ def main():
         k = int(fsh); n = int(os.environ.get("FED_SHARDS", "4"))
         print("MODE: federation shard %d of %d" % (k, n))
         os.environ["HARVEST_FEDERATIONS"] = "1"   # shard gets fed-mode budgets + depth
+        # Global wall-clock guard: stay safely under the Actions 6h job ceiling no
+        # matter how the per-federation budgets add up. Default 315 min; each
+        # federation is skipped once the guard is passed, and whatever has been
+        # gathered so far is still written -- so a slow shard degrades instead of
+        # being cancelled with no artifact (which would fail the merge).
+        _shard_end = time.time() + int(os.environ.get("FED_SHARD_MAX_MIN", "315")) * 60
+        def _fed_step(name, fn):
+            if time.time() > _shard_end:
+                _flag("shard %d: wall-clock guard passed -- skipping %s" % (k, name))
+                return []
+            return _run(name, fn)
         items = []
-        items += _run("ckan_federation", fetch_ckan_federation)
-        items += _run("ods_federation", fetch_ods_federation)
-        items += _run("geonode_federation", fetch_geonode_federation)
-        items += _run("dkan_federation", fetch_dkan_federation)
+        # Order matters: run uData FIRST on shard 0 so its extra load can't be the
+        # thing that gets starved, then the rest. Incrementally persist after each
+        # federation so a hard kill still leaves a usable partial artifact.
+        def _persist():
+            try:
+                with open("fed_part_%d.json" % k, "w", encoding="utf-8") as f:
+                    json.dump(items, f, ensure_ascii=False, separators=(",", ":"))
+            except Exception as _e:
+                print("  shard %d: partial persist failed: %s" % (k, _e))
         if k == 0:
-            items += _run("udata_federation", fetch_udata_federation)  # only 2 portals -- one shard
-        items += _run("wfs_federation", fetch_wfs_federation)
-        items += _run("ogcapi_federation", fetch_ogcapi_federation)
-        with open("fed_part_%d.json" % k, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, separators=(",", ":"))
+            items += _fed_step("udata_federation", fetch_udata_federation); _persist()
+        items += _fed_step("ckan_federation", fetch_ckan_federation); _persist()
+        items += _fed_step("ods_federation", fetch_ods_federation); _persist()
+        items += _fed_step("geonode_federation", fetch_geonode_federation); _persist()
+        items += _fed_step("dkan_federation", fetch_dkan_federation); _persist()
+        items += _fed_step("wfs_federation", fetch_wfs_federation); _persist()
+        items += _fed_step("ogcapi_federation", fetch_ogcapi_federation); _persist()
+        _persist()
         print("wrote fed_part_%d.json with %d entries" % (k, len(items)))
         return
     if os.environ.get("HARVEST_FEDERATIONS") == "1":
@@ -7504,7 +7619,8 @@ def main():
     items += _run("world_bank", fetch_world_bank)               # GLOBAL: active WB-financed projects
     items += _run("iati", fetch_iati)                           # GLOBAL: aid projects WITH coordinates
     items += _run("land_matrix", fetch_land_matrix)               # GLOBAL: large-scale land acquisitions (Land Matrix, country-level)
-    items += _run("gem", fetch_gem)                               # GLOBAL: proposed fossil infra -- coal plants+mines, gas, oil (Global Energy Monitor, live)
+    items += _run("gem", fetch_gem)
+    items += _run("emodnet_wind", fetch_emodnet_wind)          # EU SEAS: offshore wind farms in development (EMODnet Human Activities)                               # GLOBAL: proposed fossil infra -- coal plants+mines, gas, oil (Global Energy Monitor, live)
     # -- portal federations run in their OWN twice-weekly job (HARVEST_FEDERATIONS=1,
     #    projects_federations.yml) with ~3x budgets + deeper per-portal caps; the daily
     #    job just carries their last results forward, like OSM --
