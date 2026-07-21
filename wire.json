@@ -48,14 +48,6 @@
   "snippet": "For the first time in 10 years, a critically endangered white-rumped vulture has been spotted in Cambodia’s Lomphat Wildlife Sanctuary. However, this conservation milestone is unfolding just as the sanctuary stares down new threats from mining operations and hydropower dams. Duri"
  },
  {
-  "name": "Mongabay",
-  "title": "Why are forests vanishing in southeastern Liberia?",
-  "link": "https://news.mongabay.com/video/2026/07/why-are-forests-vanishing-in-southeastern-liberia/",
-  "date": 1784363683000,
-  "sig": 2,
-  "snippet": "GRAND GEDEH, Liberia – In the past century, most of West Africa’s Upper Guinean rainforest has been lost to commercial agriculture, infrastructure development and logging. More than half of what’s left is in Liberia, and the remaining rainforest now faces a threat that’s already "
- },
- {
   "name": "Climate Home News",
   "title": "Top maritime court rejects bid to halt UN deep-sea mining inquiry",
   "link": "https://www.climatechangenews.com/2026/07/20/top-maritime-court-rejects-bid-to-halt-un-deep-sea-mining-inquiry/",
@@ -94,6 +86,14 @@
   "date": 1784229401000,
   "sig": 2,
   "snippet": "Alberta Examines Three Northern B.C. Routes for Oil Pipeline  EnergyNow.com"
+ },
+ {
+  "name": "Grist",
+  "title": "French Polynesia objects to an American seabed mining plan made without its input",
+  "link": "https://grist.org/indigenous/french-polynesia-objects-to-an-american-seabed-mining-plan-made-without-its-input/",
+  "date": 1784622600000,
+  "sig": 2,
+  "snippet": ""
  },
  {
   "name": "Mongabay",
@@ -145,11 +145,11 @@
  },
  {
   "name": "Front: Trans Mountain pipeline Canada",
-  "title": "New Oil Pipelines Being Planned by Canada to Export Alberta Oil - The Institute for Energy Research",
-  "link": "https://news.google.com/rss/articles/CBMizAFBVV95cUxOTWpVTEpkY09BNF9kOHhhazVDcWJad0xFZnRmNFJpd25FdFZ2a0JOcVU4YzltbjJDTmN6SGhDUk1ObC1zd21kRExTeEo1aTEtQlRJNGpVWHNEalpGOEVnNklDUUx5X1E2b2I3Z2Z1M3hyOGtJdGxMajlQTk1zTDJScTBnb0dLU2twQU04cWJ2MlhxU0ZiWlY3eVJGLTVIelptWDh6UkJ6OURKay1FV19IZ2l1THFQLW9DRnNEb3dKYl9qWElxMG5CMDNERms?oc=5",
-  "date": 1784038106000,
+  "title": "China’s Rongsheng Weighs Alberta-to-B.C. Pipeline Oil Supply Pact - EnergyNow",
+  "link": "https://news.google.com/rss/articles/CBMimAFBVV95cUxNZjIxU2g3RldDdU84S0ZjUER4dUNqaEF3V21iRnVXUFZ5WHNJa0hYcFYyek0tNlBrbDUtZklTTllPQWZLMDBuLW80NVRwS2tIUl83STJjcjVsendmcUI1SzFHSUw4NUJMeVBGZ0NxSjV4WEp5STIxdXFhdTZUQTNCSzVqMFkwQ1ZlUGdWTzRIRHRHR0VDMXdVVw?oc=5",
+  "date": 1784460213000,
   "sig": 2,
-  "snippet": "New Oil Pipelines Being Planned by Canada to Export Alberta Oil  The Institute for Energy Research"
+  "snippet": "China’s Rongsheng Weighs Alberta-to-B.C. Pipeline Oil Supply Pact  EnergyNow"
  },
  {
   "name": "Front: Trans Mountain pipeline Canada",
@@ -201,6 +201,14 @@
  },
  {
   "name": "Grist",
+  "title": "Why the Iran war hasn’t caused a global oil crisis — yet",
+  "link": "https://grist.org/energy/why-the-iran-war-hasnt-caused-a-global-oil-crisis-yet/",
+  "date": 1784623500000,
+  "sig": 2,
+  "snippet": ""
+ },
+ {
+  "name": "Grist",
   "title": "New York governor orders first statewide data center moratorium",
   "link": "https://grist.org/politics/new-york-governor-orders-first-statewide-data-center-moratorium/",
   "date": 1784379600000,
@@ -232,12 +240,12 @@
   "snippet": ""
  },
  {
-  "name": "Grist",
-  "title": "Nebraska wants data centers to come clean about water usage",
-  "link": "https://grist.org/climate-energy/nebraska-wants-data-centers-to-come-clean-about-water-usage/",
-  "date": 1784102400000,
+  "name": "Mongabay",
+  "title": "Extreme heat is eroding health, productivity and incomes of Dhaka’s informal workers",
+  "link": "https://news.mongabay.com/2026/07/extreme-heat-is-eroding-health-productivity-and-incomes-of-dhakas-informal-workers/",
+  "date": 1784639510000,
   "sig": 2,
-  "snippet": ""
+  "snippet": "DHAKA — On June 28, as the afternoon sun beat down on Bangladesh capital Dhaka’s sprawling Tejgaon neighborhood, Samiha Begum gathered her two school-aged children and headed for the shade of Hatirjheel Lake. Their narrow one-room home in a nearby slum had become unbearable. She "
  },
  {
   "name": "Mongabay",
@@ -286,6 +294,22 @@
   "date": 1784599529000,
   "sig": 2,
   "snippet": "Bertha could bring heavy rain on US Gulf coast, with its center located 110 miles south of Panama City, FloridaTropical Storm Bertha formed Monday evening in the Gulf of Mexico south of the Florida Panhandle as it drifts erratically toward populated coastal areas, bringing a thre"
+ },
+ {
+  "name": "Guardian Environment",
+  "title": "First Nations groups devastated by Canada’s wildfires say government did not help",
+  "link": "https://www.theguardian.com/world/2026/jul/21/first-nations-ontario-canada-wildfires-evacuations-government",
+  "date": 1784634330000,
+  "sig": 2,
+  "snippet": "Chiefs in Ontario say they were left to self-evacuate before homes burned to ground, after being told there was no imminent threatFast-moving wildfires have burned two First Nations communities in Canada to the ground, as members said they were left to self-evacuate without gover"
+ },
+ {
+  "name": "Guardian Environment",
+  "title": "Rescuers in Afghanistan search for missing and dead after flash floods destroy homes",
+  "link": "https://www.theguardian.com/world/2026/jul/20/deadly-floods-nuristan-afghanistan",
+  "date": 1784628562000,
+  "sig": 2,
+  "snippet": "National disaster agency confirms ‘severe financial and human losses’ in eastern  province of NuristanRescue crews in Afghanistan are searching for survivors and bodies among the rubble of houses destroyed by devastating flash floods that authorities said had killed nearly two do"
  },
  {
   "name": "Guardian Environment",
@@ -353,11 +377,11 @@
  },
  {
   "name": "Front: Line 5 pipeline",
-  "title": "Michigan approves key permits for controversial Line 5 tunnel - The Center Square",
-  "link": "https://news.google.com/rss/articles/CBMilAFBVV95cUxNOXR0eUxiVm13amdmNV8wYWRtb1RlSmhTckxzSDBOOFVGTmpFamhSY3VaN1JQb1NWUHljX1A2eWNwaVkwZ1Nuc3JKUjVFc1NmaVh0YjJqRUx0dGhHMWlxZnBWSFRQY2cwZFpuUjFDM2pXelUwVkowVE1kdjBDRG1tUnBrSTZJN0FXTkt5a0lXVmd0Wkky0gGaAUFVX3lxTFBRekVrT2c3ZEJYMVdNLV9HaUhhWE5kSTlPMXVrbHAxMnZLSF9talRmNjdnLVFmZVhzRHJrSktySEIxU09wVWlWX2NiQ2praE1ZREJtczVDYU5ub0lRQnNxdGNaR2Y5WHY5TkZTeTM0N09ESVhFUGhNWE9nOExLbnhqZkE2VGIyQk9fVDFkZVBtbDNEQ3VlQWFRbVE?oc=5",
-  "date": 1784566740000,
+  "title": "State approves \"Line 5 Pipeline Project\" despite regulator concerns - FOX 17 West Michigan News",
+  "link": "https://news.google.com/rss/articles/CBMirgFBVV95cUxQODJXWUs5VlJNZGVCUm9Vb2lGcXdyQVVWT0ZmTmctM0ZMNFZ5S2dBb1ZtUXdqbVdjbzNITE92YTVsUnFubV9melAwQy1uYWJNNE9oZjVLZjRoa0VCcTVPaUVIVTF0Y0hWUWM1T0lQN3BPZ3dLUWRYcU5mUHVjU1RORGdfR1BRLTNOb0NxZnNJSEkwamFVSnpheXIyTmdkUktSSWhSckNwMms0R0YzUXc?oc=5",
+  "date": 1784302963000,
   "sig": 2,
-  "snippet": "Michigan approves key permits for controversial Line 5 tunnel  The Center Square"
+  "snippet": "State approves \"Line 5 Pipeline Project\" despite regulator concerns  FOX 17 West Michigan News"
  },
  {
   "name": "Front: CP2 LNG terminal",
@@ -368,28 +392,12 @@
   "snippet": "Venture Global’s CP2 LNG Plant Costs Increase by $4 Billion  EnergyNow.com"
  },
  {
-  "name": "Front: Trans Mountain pipeline Canada",
-  "title": "EDGE OF SOMETHING REALLY BIG: Canadian Pipeline Industry Seen on ‘Edge of Something Really Big’ as More Projects Advance - VARCOE - EnergyNow",
-  "link": "https://news.google.com/rss/articles/CBMiugFBVV95cUxNUTliWXRBVFQ2M3RXRzBxQzZfOENwUnBsS25PU3RpbFBMRERPNHl6elVrNlRDa2l1TjlmS0dhMEw2dHo4cnYzVWZGbFp3R3FTd3ljclE2dW9vUldSams2cjZhdDlRMnQ3RU1NUkZyNTdVbDZ1T1JYcE5pZHY2R29tVDNCTGtFYVdwTkQwS240VVF1eGlRTFQtLXJoUmpObHBtZWRFWGktRXpPdWtDSk50dG81bFllRko2dkE?oc=5",
-  "date": 1784586653000,
-  "sig": 2,
-  "snippet": "EDGE OF SOMETHING REALLY BIG: Canadian Pipeline Industry Seen on ‘Edge of Something Really Big’ as More Projects Advance - VARCOE  EnergyNow"
- },
- {
   "name": "Front: deep sea mining Pacific",
   "title": "Trump administration launches first deep sea mining lease sale despite Pacific opposition - greenpeace.org",
   "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxNZ3FoSWZqLWI5Um5JV3MwaEY0NVA4eUZDYjVYWXF0ZlRWLWd6NU9palNpcmUwUkpaMWYyamFjM2V6M1gyRG0wbWlYamlWNks0WDNXWVVLR1RGb2syYTZYNmlCNFV5LWtwTmFOdlVJQ0YwekhIUnVRcWtUazZJTmJWMkVobk51MmotWHpPcnhmajZrdGEyWndBMkVqaEZpeEpYVGhOQnJmY0I5MEZlWE1yTm9wRGtrWno5MHdWQzBR?oc=5",
   "date": 1784235811000,
   "sig": 2,
   "snippet": "Trump administration launches first deep sea mining lease sale despite Pacific opposition  greenpeace.org"
- },
- {
-  "name": "Front: old growth logging protest",
-  "title": "Forest wars ‘breakthrough’ as industry backs old growth ban - The Australian",
-  "link": "https://news.google.com/rss/articles/CBMihAJBVV95cUxQTDFhVmlSMHlPVWNpcUNKeGJfSm5OREpBUkZSSnpCemhFSE9RUEt6UllVT3pyOE5UaERsQ2p0UUh5bW1MbUIwajV5QldIZXFicTN1Rmp2c2xKY21GZmFBVTlxY1BIdjI0NWk4Y2RRVk1kcFdETmRzcXBGZmVrUG1ZRFBRNGZNdVA2RVNuelJBUG9wX2J6VnRiLWp1bVl1SERFYTAwd0ZUbDBBakVWVDV4akhxMThMQ2QwMzRxZzhVTWJ5MV80TnNxYTVEQVVLQ0ZMNjN2TDFyNXM5N28xVzlBVmhhUnA2Ym5ERnJRRm8talRxVkFnOC1ES2thYWtJck9YSlJ1QtIBigJBVV95cUxOT3dyUllwdW4ybUY0czluVmI0al9Wd0ZrMzI0Q1NDalNHVERkWEgxLUhSM1U0SXk0bHY1ZTVndWFfWUlvZ1BjUUdndzZkYlFSeUdvUE42amVZdVo2cVY2T1A4YmMyZ3I0Y3NLRzhZdWRMUG9DVzZ1YmZYblFnNktlcFJDWHg2NUQ4RHAtdlB5UF9MSm5VeXktOEdjQ1lwQ1lUOFNjNTF5TmxuZXRwNERHTHZYTTNjQ2FHcjZ3NHRhUUVFdE1MNHpXeGJzOEwxcDd1NjR2TWUwRVdud254Uzl4MmJhVThkc0NZLVA2cVdfNGVsUjBZaUdmTl8zLUJiT0JfMVpEWUExeVQ0Zw?oc=5",
-  "date": 1784124060000,
-  "sig": 2,
-  "snippet": "Forest wars ‘breakthrough’ as industry backs old growth ban  The Australian"
  },
  {
   "name": "Front: EACOP East African Crude Oil Pipeline",
@@ -422,14 +430,6 @@
   "date": 1783407600000,
   "sig": 2,
   "snippet": "Ugandan farmers sue to stop $5.6 billion East African Crude Oil Pipeline in UK court  Business Insider Africa"
- },
- {
-  "name": "Front: EACOP East African Crude Oil Pipeline",
-  "title": "The East African Crude Oil Pipeline Is Almost Built. - Environment+Energy Leader",
-  "link": "https://news.google.com/rss/articles/CBMiqgFBVV95cUxPV3Q4NXNkSlM4RnZEYjVEQ2NPR09QNlVQUWtYY2QteGF3YmVVZENqajNwNTd4RUtMaWpCTHhjUWpCdE0zSVh3bHczLVgtYmFCbHp0LTF4QnVtc3lQYWRHdGxCdm1hV0h0THpoVGR2SDN1WTRSNEtMakdDV3pjdFl3eTVRN3dxcFEtcjFVZ2hLYWhlaWVzaDZXRzl2Nm1LbnNwVkRnTWlFRXRoQQ?oc=5",
-  "date": 1780988400000,
-  "sig": 2,
-  "snippet": "The East African Crude Oil Pipeline Is Almost Built.  Environment+Energy Leader"
  },
  {
   "name": "Front: Cobre Panama mine",
