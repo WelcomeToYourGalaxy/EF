@@ -1,13 +1,5 @@
 [
  {
-  "name": "Unicorn Riot",
-  "title": "NYC Activists Maintain Boycott Against ‘Blood Money Rave’ Boiler Room",
-  "link": "https://unicornriot.ninja/2026/nyc-activists-maintain-boycott-against-blood-money-rave-boiler-room/",
-  "date": 1783985286000,
-  "sig": 3,
-  "snippet": "The fight for nightlife goes on as Boycott Room, a group of DJs, organizers and activists that have been calling for a coordinated boycott of the event series and video platform Boiler Room took another stand with protests and a counter-rave on July 10 and…\nThe post NYC Activists"
- },
- {
   "name": "It's Going Down",
   "title": "Freedom for the Prisoners from San Juan Cancuc, Chiapas",
   "link": "https://itsgoingdown.org/freedom-prisoners-san-juan-cancuc-chiapas/",
@@ -30,6 +22,14 @@
   "date": 1755760207000,
   "sig": 3,
   "snippet": "Mutual Aid Disaster Relief reports on autonomous mutual aid organizing in the face of the growing climate crisis.  We do not wait for help; we become it. Without permission, we build in the ashes, along the flood plains, and across the fault lines. Disasters keep coming, and we r"
+ },
+ {
+  "name": "Unicorn Riot",
+  "title": "NYC Activists Maintain Boycott Against ‘Blood Money Rave’ Boiler Room",
+  "link": "https://unicornriot.ninja/2026/nyc-activists-maintain-boycott-against-blood-money-rave-boiler-room/",
+  "date": 1783985286000,
+  "sig": 3,
+  "snippet": "The fight for nightlife goes on as Boycott Room, a group of DJs, organizers and activists that have been calling for a coordinated boycott of the event series and video platform Boiler Room took another stand with protests and a counter-rave on July 10 and…\nThe post NYC Activists"
  },
  {
   "name": "Unicorn Riot",
@@ -56,14 +56,6 @@
   "snippet": "GRAND GEDEH, Liberia – In the past century, most of West Africa’s Upper Guinean rainforest has been lost to commercial agriculture, infrastructure development and logging. More than half of what’s left is in Liberia, and the remaining rainforest now faces a threat that’s already "
  },
  {
-  "name": "Mongabay",
-  "title": "US government announces plans to lease deep-sea mining rights in American Samoa",
-  "link": "https://news.mongabay.com/short-article/2026/07/us-government-announces-plans-to-lease-deep-sea-mining-rights-in-american-samoa/",
-  "date": 1784317504000,
-  "sig": 2,
-  "snippet": "The U.S. government has taken another definitive step toward launching a deep-sea mining industry, starting in the waters of American Samoa, despite public opposition. On July 17, the Marine Minerals Administration (MMA), a new U.S. agency formed by merging the Bureau of Ocean En"
- },
- {
   "name": "Climate Home News",
   "title": "Top maritime court rejects bid to halt UN deep-sea mining inquiry",
   "link": "https://www.climatechangenews.com/2026/07/20/top-maritime-court-rejects-bid-to-halt-un-deep-sea-mining-inquiry/",
@@ -78,6 +70,30 @@
   "date": 1784471157000,
   "sig": 2,
   "snippet": "Esta semana presentamos un estudio que revela que más de 6 millones de personas viven en regiones donde podría expandirse el fracking en México. Expertos advierten impactos en el agua y territorios. Desde Bolivia, el Gobierno reconoce que la minería ilegal se adueñó de zonas aurí"
+ },
+ {
+  "name": "Front: Line 5 pipeline",
+  "title": "State renews permit for Enbridge oil pipeline tunnel under Straits of Mackinac - Detroit Free Press",
+  "link": "https://news.google.com/rss/articles/CBMi1wFBVV95cUxQZ25aUmlBa2lJdEdpRFFlR3BSTFRFd29VdTYtSTJ2UVFFendPSS0xR0hmRS1sdkw5R25xOVhHZjVRWHlWMC0xUDZJU2dSWUJDOVgzbnNKWmU5R1piZWRsWmh5NU1YSl9naDNrbzd4MXN1MzRJcDRUMmNKeFBLZWlEb043NmJsaWg3UUFnSVpHZFp2RmVMRldDbl94QnJhaXBlekwtT3dQOTdJUmM4czExejktVjlwTzV5N2FfcS1Sa2hYT0gxMWNlYWZWZHRnWDZfYVdKTkFqcw?oc=5",
+  "date": 1784156364000,
+  "sig": 2,
+  "snippet": "State renews permit for Enbridge oil pipeline tunnel under Straits of Mackinac  Detroit Free Press"
+ },
+ {
+  "name": "Front: Resolution Copper Oak Flat",
+  "title": "Copper mine opponents file new lawsuit to block Oak Flat project - AOL.com",
+  "link": "https://news.google.com/rss/articles/CBMihAFBVV95cUxPM0lYc0thU2dacW42bDJEeGV1cG5hUlI5N3ZtMHE5LUZFX29GS0R3ZzdqU3VrX2NOeXdoN3FpUTBPLS01dTFDUTJqUURLMDRtLThXUVdPZ2YwVnhFMS1FVmZ6Tkw3WnZITGhKLXlNZGI2WkRBc0F0MFAzQk1YZHQ5aFItT3c?oc=5",
+  "date": 1784579325000,
+  "sig": 2,
+  "snippet": "Copper mine opponents file new lawsuit to block Oak Flat project  AOL.com"
+ },
+ {
+  "name": "Front: Trans Mountain pipeline Canada",
+  "title": "Alberta Examines Three Northern B.C. Routes for Oil Pipeline - EnergyNow.com",
+  "link": "https://news.google.com/rss/articles/CBMilAFBVV95cUxPV05qR2NMZmFjSDJUZHRYLTBlRXVpZnpYa3Z4S1oxZU1pSXFpOEMxUG5PNHNBRHp5V2xBR0p0bFUydFhjcW1IeHZNS0oycTNtSXNQcFJWbmh1Y3kzUW8yVWRrT1V6YXZUTGNsVW03MUhSb3VOVTR3a3FaUk5ZMzBSVGswYlhqNmNkNUlFQTBxeE9jRlZn?oc=5",
+  "date": 1784229401000,
+  "sig": 2,
+  "snippet": "Alberta Examines Three Northern B.C. Routes for Oil Pipeline  EnergyNow.com"
  },
  {
   "name": "Mongabay",
@@ -118,6 +134,78 @@
   "date": 1784122244000,
   "sig": 2,
   "snippet": "Mientras en México se discute la posibilidad de expandir el uso del fracking, poco se dice sobre dónde se podría llevar a cabo y qué impactos podría tener. Un reciente informe de la organización CartoCrítica advierte que la extracción de gas y petróleo mediante este método implic"
+ },
+ {
+  "name": "Front: Line 5 pipeline",
+  "title": "Michigan signs off on Canadian oil giant's Line 5 pipeline project - Milwaukee Journal Sentinel",
+  "link": "https://news.google.com/rss/articles/CBMi2AFBVV95cUxQX19fc1B3bW1xek1waWhnZzdNRXFJTTlNT3J5VGM1R3FvUFVfaXZQN2NoY1dWOUZPcUxHSnIyRVVUMUFJNU1TR1FkVGhpd2FMTHpjbWNxNTcyakkxWC14eEczZ2dQa2RjNWo2U1RLU1B3Z19FQXdQb256NEtFa2dadnhjeng4ZlJUdW9DaXg1Sm1teHVES1lHa09meTF6MzE0RGhzWkV6Y2Q0Z2VVaU8wTGNDdmNucDZISkpnTldZSVFETWxVZmJ5Rmx0d0VGYmlZMF9BU0E0TEw?oc=5",
+  "date": 1784153220000,
+  "sig": 2,
+  "snippet": "Michigan signs off on Canadian oil giant's Line 5 pipeline project  Milwaukee Journal Sentinel"
+ },
+ {
+  "name": "Front: Trans Mountain pipeline Canada",
+  "title": "Top five reasons a new West Coast oil pipeline is in Canada’s national interest - BOE Report",
+  "link": "https://news.google.com/rss/articles/CBMisgFBVV95cUxPemZMd1Q1SkhmNEZRS0x0NnAtWWRRUnFaMEx5RUdfV053RnhmTFFkZmZmZVhwZk45TU92X3JlaU9sZmtkVE5hQjhqNW1ablpqZS1QUjEwVGpsWV9JeVVnTkUyMHdRSUQ0dmlPa05Pa2VQbGhLcGpLQ282bFVINlNZVThKRUd1bjlHMk5QWWVLa2VnSTRKRWJKaHhpSlEwWXRwVkNLa25paFhaZFNvcEY0WU1B?oc=5",
+  "date": 1784567003000,
+  "sig": 2,
+  "snippet": "Top five reasons a new West Coast oil pipeline is in Canada’s national interest  BOE Report"
+ },
+ {
+  "name": "Front: Trans Mountain pipeline Canada",
+  "title": "New Oil Pipelines Being Planned by Canada to Export Alberta Oil - The Institute for Energy Research",
+  "link": "https://news.google.com/rss/articles/CBMizAFBVV95cUxOTWpVTEpkY09BNF9kOHhhazVDcWJad0xFZnRmNFJpd25FdFZ2a0JOcVU4YzltbjJDTmN6SGhDUk1ObC1zd21kRExTeEo1aTEtQlRJNGpVWHNEalpGOEVnNklDUUx5X1E2b2I3Z2Z1M3hyOGtJdGxMajlQTk1zTDJScTBnb0dLU2twQU04cWJ2MlhxU0ZiWlY3eVJGLTVIelptWDh6UkJ6OURKay1FV19IZ2l1THFQLW9DRnNEb3dKYl9qWElxMG5CMDNERms?oc=5",
+  "date": 1784038106000,
+  "sig": 2,
+  "snippet": "New Oil Pipelines Being Planned by Canada to Export Alberta Oil  The Institute for Energy Research"
+ },
+ {
+  "name": "Front: Trans Mountain pipeline Canada",
+  "title": "China’s Rongsheng Weighs Alberta-to-B.C. Pipeline Oil Supply Pact - EnergyNow",
+  "link": "https://news.google.com/rss/articles/CBMimAFBVV95cUxNZjIxU2g3RldDdU84S0ZjUER4dUNqaEF3V21iRnVXUFZ5WHNJa0hYcFYyek0tNlBrbDUtZklTTllPQWZLMDBuLW80NVRwS2tIUl83STJjcjVsendmcUI1SzFHSUw4NUJMeVBGZ0NxSjV4WEp5STIxdXFhdTZUQTNCSzVqMFkwQ1ZlUGdWTzRIRHRHR0VDMXdVVw?oc=5",
+  "date": 1784460213000,
+  "sig": 2,
+  "snippet": "China’s Rongsheng Weighs Alberta-to-B.C. Pipeline Oil Supply Pact  EnergyNow"
+ },
+ {
+  "name": "Front: deep sea mining Pacific",
+  "title": "First deep-sea mining lease 'being forced on Pacific communities' - Oceanographic Magazine",
+  "link": "https://news.google.com/rss/articles/CBMipgFBVV95cUxQb1ozV1VzQ1BrLXlvSzE0Y25wWFR2bEJwX1JLYVRHNjBjTVNPT1VuNlFyVHpLc1lHb2ppdl9aU2pzaTY1amxPOXdja0tpTVZjck4wdTU0WWRnRjJnQ0dOZWtJQ1FQVnFIUUVQdkhVNTFadURLS0N0MGw4cGdKd3IxZEdvLUE5VkFmLVpoc1lSSjNQYWphbEMxTmVLWGhDNXNVQTJDcjZn?oc=5",
+  "date": 1784284560000,
+  "sig": 2,
+  "snippet": "First deep-sea mining lease 'being forced on Pacific communities'  Oceanographic Magazine"
+ },
+ {
+  "name": "Front: deep sea mining Pacific",
+  "title": "US government announces plans to lease deep-sea mining rights in American Samoa - news - Mongabay",
+  "link": "https://news.google.com/rss/articles/CBMivAFBVV95cUxNWHZpOEM2ZWViUGllaDR4MUlEQ190emcweTFnZkJIaXFqdnhyYkNLajZNeXl5Q2FTNDVZUUxxb0R0TC1xWC15R2FEaUlfSkd4YkYwNWNpWno3SXVHUXN6akVDT2w2UWZkcDRMNmNzRXJ6Y3o1OUFtWnZOaklUQmxiNHlLMWZMOWN3Y0RTc1BuUDRIbWRKV3dvNS1JTDhlNVhCZ25ackQ2a2llVDd4MHpBQTZ3U0EzaGM5OVVpMQ?oc=5",
+  "date": 1784317592000,
+  "sig": 2,
+  "snippet": "US government announces plans to lease deep-sea mining rights in American Samoa  news - Mongabay"
+ },
+ {
+  "name": "Front: deep sea mining Pacific",
+  "title": "Washington moves to start deep-sea mining in American Samoa - euractiv.com",
+  "link": "https://news.google.com/rss/articles/CBMilAFBVV95cUxPQnEyXzdrRTdjVnlQZ0hzaWZnRGJjY3hteFJXVkFEZEp4WklQc1N2UTBRUFFaeW9GcjJSUXA1UjJzQmJVcXhjZzl6OThUcXA1cnRid2p3a05WTC05UTZlWElZX1NNVjRuQmVrQ294cFRiUW81MVd6VWo4Y0Z3MzdaLVJRNUx3Y3o2MVdtR3VPSEZ2WjFZ?oc=5",
+  "date": 1784303923000,
+  "sig": 2,
+  "snippet": "Washington moves to start deep-sea mining in American Samoa  euractiv.com"
+ },
+ {
+  "name": "Front: deep sea mining Pacific",
+  "title": "Deep-sea mining plan off American Samoa draws criticism - Hawaii News Now",
+  "link": "https://news.google.com/rss/articles/CBMingFBVV95cUxPRS1GRG5ETFhQMzVHRUFhb2NZUkh1MjZHYUh0ZTE5dHN5TTYxeEZRQ3J5QU02OU9YTC0xZnpGTlVPX0tSTWtiYUxpMG1rVWpxV1NfYnduUGVNMTZUbktHMnhlS05UemIyV0hYLXN4d3FPX1I4ZnMwUUM4N3c4NEdjX1c3ZnZMT2daY0dOZWNuaXdLVzlqZ1B0LURTOUtDUdIBsgFBVV95cUxQQ29weU9WcW1xc3BlU05KdFJVU2hRb0FtNXZIZ3VLajhhcm1QNFczeTlDX2Q4N19lWFJmYjVXQ0FXYXB6Q0lTdWZoUE9NMktuUHg2VXdtRXZjZktsVnZKeWJPc1NmZkFFTXFsNFpkZHdXNGJBMGtiNm1BblA2NU5BcElCN0hLTWEyU0RmMUUyZkpiZVpaQjUzMHV1dlVpbGFIaU5fVzFxcDBrbldNV3dFaUZB?oc=5",
+  "date": 1784262120000,
+  "sig": 2,
+  "snippet": "Deep-sea mining plan off American Samoa draws criticism  Hawaii News Now"
+ },
+ {
+  "name": "Front: deep sea mining Pacific",
+  "title": "Activists protest Pacific deep-sea mining by Swiss-based firm - SWI swissinfo.ch",
+  "link": "https://news.google.com/rss/articles/CBMiqwFBVV95cUxNeW53LXVxUUE4RXBaelJ4YU5pOVh6cnZTb290ZTl0ZHJoVFNrb1NhR3NSSVJkWTNFYkhMcW1GeWthaC1uNkRvTGVyYkpoeUdPam04ZGthSC1qLXU1M0hhSGlEU3F0OEtRLUMwbGZZQmJPQ2VEUGNYc0YwZDdKTkYwN0JwSzNaNTcwUlc2TldjMUpGYUxWSHBWM0Y0M0pqYVhYdENQazA2ejNJYkk?oc=5",
+  "date": 1784451900000,
+  "sig": 2,
+  "snippet": "Activists protest Pacific deep-sea mining by Swiss-based firm  SWI swissinfo.ch"
  },
  {
   "name": "Grist",
@@ -161,6 +249,14 @@
  },
  {
   "name": "Mongabay",
+  "title": "Renato Moraes de Jesus was a pioneer of Atlantic Forest restoration in Brazil",
+  "link": "https://news.mongabay.com/2026/07/renato-moraes-de-jesus-obituary/",
+  "date": 1784594499000,
+  "sig": 2,
+  "snippet": "In 1977 a young forest engineer arrived at a neglected tract of Atlantic Forest in northern Espírito Santo. A mining company had acquired the property as a source of hardwood for railway sleepers. Two hundred hectares had already been cut. Some specialists proposed harvesting mor"
+ },
+ {
+  "name": "Mongabay",
   "title": "From rivers to mangroves, microplastics are contaminating the Amazon",
   "link": "https://news.mongabay.com/2026/07/from-rivers-to-mangroves-microplastics-are-contaminating-the-amazon/",
   "date": 1784551339000,
@@ -174,14 +270,6 @@
   "date": 1784534092000,
   "sig": 2,
   "snippet": "For more than half a century, the United States treated the protection of habitat as part of protecting endangered wildlife. The Endangered Species Act prohibited killing protected wildlife, and the government interpreted that protection to include severe damage to the habitat ne"
- },
- {
-  "name": "Inside Climate News",
-  "title": "Will Congress Ban ‘Mud Dumping’ in Mobile Bay?",
-  "link": "https://insideclimatenews.org/news/17072026/mobile-bay-dredged-mud-dumping-ban/",
-  "date": 1784320634000,
-  "sig": 2,
-  "snippet": "For decades, fishers, swimmers and environmental groups have complained that mud and silt from dredging operations in the Mobile Bay shipping channel have been smothering seagrasses, choking out oysters and clouding water that was once pristine.  Now those groups are one step clo"
  },
  {
   "name": "The Narwhal",
@@ -232,43 +320,163 @@
   "snippet": "El 1° de julio una comitiva técnica de la Autoridad Jurisdiccional Administrativa Minera (AJAM) de Bolivia fue emboscada en la comunidad de Achiquiri, en el municipio de Mapiri, en el departamento de La Paz. Esa comisión tenía la misión de verificar la presencia de minería ilegal"
  },
  {
-  "name": "The Narwhal",
-  "title": "Pipeline-a-palooza: unpacking the week in Canadian energy politics",
-  "link": "https://thenarwhal.ca/three-pipeline-announcements-2026/?utm_source=rss",
-  "date": 1783630573000,
+  "name": "Front: Mountain Valley Pipeline",
+  "title": "Mountain Valley urges continued review of Swann compressor - The Center Square",
+  "link": "https://news.google.com/rss/articles/CBMilAFBVV95cUxORi14RkVUVmdIUXVkaEdNb21wbW81X3ZzQ2MwYjJjRzZOZ3BHc3oxTDZzS2NzV3JVckNaVk9QVVFIWHlLLWd4OWVhM2JNOTg2ZW5GM2R4MWhEMl9IbndaUkp1cWk1MzB6Z21jSjU5cUE3enJ6aGZQUWl5cHJYcm9ZNk9CR2hhQTFWZE1BN1Jza2Y0bUFE0gGaAUFVX3lxTE9lV2xBZ3lwaFBaeU5BaGE3ZDVYenZHR2thZEpPdm93Xy1PUFZfWGZPaFBoMWc3WGxZbF96RnRIOTZhOHh3eVlZRWRLaFlsa0JlRHp4X3BYaWhXeklqTFBaYjRMLW12TlRXTEZESTF4M2x0WEdhMlV4SWQ0ekdrSmFtTnYwTEc1c0w5Q0JtSlpPRzRzR2pZRkFMalE?oc=5",
+  "date": 1784042400000,
   "sig": 2,
-  "snippet": "If pipelines really are Canada’s economic saviour, why are taxpayers footing the bill for them?"
+  "snippet": "Mountain Valley urges continued review of Swann compressor  The Center Square"
  },
  {
-  "name": "Climate Home News",
-  "title": "Loss and damage fund delays first project approvals as needs dwarf resources",
-  "link": "https://www.climatechangenews.com/2026/07/10/loss-and-damage-fund-delays-first-project-approvals-as-needs-dwarf-resources/",
-  "date": 1783691946000,
+  "name": "Front: Line 5 pipeline",
+  "title": "State issues Line 5 permits despite conceding its ‘significant impacts’ - Bridge Michigan",
+  "link": "https://news.google.com/rss/articles/CBMiugFBVV95cUxPV0RpTFBOeWQzLUthZUFacGsyUU9XMjFubVBvZnFwOUppMUpvVXZrMmtJVkNCSXdOdzBPTlFYMzMyREJNQ0FxS1hTSDRxV1MzUG9yUXJZOXJ6TW5FTm1BczlhU0ZCamV2Y0dvdE1jTlM2WVdFZ2N5R2xzMnhva2NDMW04TER6V2tFNlA3Z1F0a3pIcDNLeDJqWDE3UC10WDJUZm5XNWxYLUh6UEk1a0pxOVE3c2tMYW1xZnc?oc=5",
+  "date": 1784212616000,
   "sig": 2,
-  "snippet": "The new Fund for Responding to Loss and Damage faces an overwhelming number of initial requests for its limited pot of money and board members decided to take more time to choose which to back first\nThe post Loss and damage fund delays first project approvals as needs dwarf resou"
+  "snippet": "State issues Line 5 permits despite conceding its ‘significant impacts’  Bridge Michigan"
  },
  {
-  "name": "Climate Home News",
-  "title": "Iran war fuel shocks threaten Africa’s clean cooking push, IEA says",
-  "link": "https://www.climatechangenews.com/2026/07/10/iran-war-fuel-shocks-threaten-africa-clean-cooking-push-iea-says/",
-  "date": 1783670480000,
+  "name": "Front: Line 5 pipeline",
+  "title": "Tribes React as Michigan Approves Line 5 Tunnel Permits - Earthjustice",
+  "link": "https://news.google.com/rss/articles/CBMilgFBVV95cUxOWFpNdzFta3gxUXdRRWVEeDZwVlNYQ0JfWXg5MjMwc1VxaDF1dXBBVjFMdW5CNDdUbTdrRVExTVJxNEFkQTZsRGxNRTd1NkFKVHlINC1RbXhLR043YVNIbHkwQllPaVRrVVZ0MTRtU1RCSW9qejh0ZVA3OGF3LUVUQlFKdE1OZzNac3dJR1Nqemd4WmhQWnc?oc=5",
+  "date": 1784154856000,
   "sig": 2,
-  "snippet": "Disruptions in the Strait of Hormuz have hit supplies of liquefied petroleum gas (LPG), seen as a cleaner cooking alternative to charcoal and wood\nThe post Iran war fuel shocks threaten Africa’s clean cooking push, IEA says appeared first on Climate Home News."
+  "snippet": "Tribes React as Michigan Approves Line 5 Tunnel Permits  Earthjustice"
  },
  {
-  "name": "Guardian Environment",
-  "title": "‘Huge wave’ of carbon storage projects causes alarm in small-town USA as oil firms eye billions in subsidies",
-  "link": "https://www.theguardian.com/us-news/2026/jul/12/carbon-sequestration-projects-oil-companies-subsidies",
-  "date": 1783857618000,
+  "name": "Front: Line 5 pipeline",
+  "title": "Tribes, environmental advocates decry Michigan’s approval of Line 5 permits - Michigan Advance",
+  "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxQeUE4bWZGUnA4NlpuYXRvbWlOUXVOb2c2S3NGdlZhU1NlOVEtdzVQTEROdU9GbV9SMGpxM2dSYlF1LW5rUURQSzB6ODZWd3p6Yzl4OERjQWJjR2l6RlV3Qk9YTUYwMjIyOXJYN3JTOENyVVZwSG9QQTU0Z3hBSWRzdzB4T3J5bDhCWVRXZEYwbEt1SVQzOUg1MnVtdHNBeHdkSjRyYW9KN08yNXNIM1ZCSF9qcw?oc=5",
+  "date": 1784225391000,
   "sig": 2,
-  "snippet": "Dozens of projects are in development across US despite concerns over environmental and health risksThe plan to bury carbon under remote Indiana farmland is supposed to be a slam dunk for the climate, according to its supporters – all generously funded by US tax dollars.But as fa"
+  "snippet": "Tribes, environmental advocates decry Michigan’s approval of Line 5 permits  Michigan Advance"
  },
  {
-  "name": "Guardian Environment",
-  "title": "A swarm of stink bugs and a river of rats: why India’s flowering bamboo causes a crisis for humans",
-  "link": "https://www.theguardian.com/environment/2026/jul/11/rats-famine-bamboo-mizoram-india-aoe",
-  "date": 1783756844000,
+  "name": "Front: Line 5 pipeline",
+  "title": "State approves \"Line 5 Pipeline Project\" despite regulator concerns - FOX 17 West Michigan News",
+  "link": "https://news.google.com/rss/articles/CBMirgFBVV95cUxQODJXWUs5VlJNZGVCUm9Vb2lGcXdyQVVWT0ZmTmctM0ZMNFZ5S2dBb1ZtUXdqbVdjbzNITE92YTVsUnFubV9melAwQy1uYWJNNE9oZjVLZjRoa0VCcTVPaUVIVTF0Y0hWUWM1T0lQN3BPZ3dLUWRYcU5mUHVjU1RORGdfR1BRLTNOb0NxZnNJSEkwamFVSnpheXIyTmdkUktSSWhSckNwMms0R0YzUXc?oc=5",
+  "date": 1784302963000,
   "sig": 2,
-  "snippet": "Every few decades mass blooming in Mizoram’s forests causes a rodent boom – and devastation to crops. The cycle is well-known, so why aren’t farmers and authorities better prepared?In the hills of Mizoram state in north-east India, the first thing that farmers notice are the swar"
+  "snippet": "State approves \"Line 5 Pipeline Project\" despite regulator concerns  FOX 17 West Michigan News"
+ },
+ {
+  "name": "Front: CP2 LNG terminal",
+  "title": "Venture Global’s CP2 LNG Plant Costs Increase by $4 Billion - EnergyNow.com",
+  "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxQb3FhbUE3cjlOeWN2d3JQVFBzdWhSVzE3SU1QNUlfRFQ4dUcxcllMVFE1WEh6MnRySWl4elBnSktWNmM4TXZDT3Frc0lrN1lRY3pBWlQ3WDZvYXNKUEh2TXVSWUx4azVpQy1YNlMwTF9ZZ2l4c3ZRQTBWdEpYbmJMV1hVb2lDUlpjaDNOSU5aWVJ3Zw?oc=5",
+  "date": 1784575808000,
+  "sig": 2,
+  "snippet": "Venture Global’s CP2 LNG Plant Costs Increase by $4 Billion  EnergyNow.com"
+ },
+ {
+  "name": "Front: deep sea mining Pacific",
+  "title": "Trump administration launches first deep sea mining lease sale despite Pacific opposition - greenpeace.org",
+  "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxNZ3FoSWZqLWI5Um5JV3MwaEY0NVA4eUZDYjVYWXF0ZlRWLWd6NU9palNpcmUwUkpaMWYyamFjM2V6M1gyRG0wbWlYamlWNks0WDNXWVVLR1RGb2syYTZYNmlCNFV5LWtwTmFOdlVJQ0YwekhIUnVRcWtUazZJTmJWMkVobk51MmotWHpPcnhmajZrdGEyWndBMkVqaEZpeEpYVGhOQnJmY0I5MEZlWE1yTm9wRGtrWno5MHdWQzBR?oc=5",
+  "date": 1784235811000,
+  "sig": 2,
+  "snippet": "Trump administration launches first deep sea mining lease sale despite Pacific opposition  greenpeace.org"
+ },
+ {
+  "name": "Front: old growth logging protest",
+  "title": "Forest wars ‘breakthrough’ as industry backs old growth ban - The Australian",
+  "link": "https://news.google.com/rss/articles/CBMihAJBVV95cUxQTDFhVmlSMHlPVWNpcUNKeGJfSm5OREpBUkZSSnpCemhFSE9RUEt6UllVT3pyOE5UaERsQ2p0UUh5bW1MbUIwajV5QldIZXFicTN1Rmp2c2xKY21GZmFBVTlxY1BIdjI0NWk4Y2RRVk1kcFdETmRzcXBGZmVrUG1ZRFBRNGZNdVA2RVNuelJBUG9wX2J6VnRiLWp1bVl1SERFYTAwd0ZUbDBBakVWVDV4akhxMThMQ2QwMzRxZzhVTWJ5MV80TnNxYTVEQVVLQ0ZMNjN2TDFyNXM5N28xVzlBVmhhUnA2Ym5ERnJRRm8talRxVkFnOC1ES2thYWtJck9YSlJ1QtIBigJBVV95cUxOT3dyUllwdW4ybUY0czluVmI0al9Wd0ZrMzI0Q1NDalNHVERkWEgxLUhSM1U0SXk0bHY1ZTVndWFfWUlvZ1BjUUdndzZkYlFSeUdvUE42amVZdVo2cVY2T1A4YmMyZ3I0Y3NLRzhZdWRMUG9DVzZ1YmZYblFnNktlcFJDWHg2NUQ4RHAtdlB5UF9MSm5VeXktOEdjQ1lwQ1lUOFNjNTF5TmxuZXRwNERHTHZYTTNjQ2FHcjZ3NHRhUUVFdE1MNHpXeGJzOEwxcDd1NjR2TWUwRVdud254Uzl4MmJhVThkc0NZLVA2cVdfNGVsUjBZaUdmTl8zLUJiT0JfMVpEWUExeVQ0Zw?oc=5",
+  "date": 1784124060000,
+  "sig": 2,
+  "snippet": "Forest wars ‘breakthrough’ as industry backs old growth ban  The Australian"
+ },
+ {
+  "name": "Front: EACOP East African Crude Oil Pipeline",
+  "title": "East African Crude Oil Pipeline threatens wetlands, wildlife corridors: Report - news - Mongabay",
+  "link": "https://news.google.com/rss/articles/CBMisAFBVV95cUxOcnhNS25uNmZMdkMyV1ZmYUxodGs0M0NxWFpLQ3hINzFKWUdvSWs5bkwteWN0VjJxZG8tYXpGMk9yaldMdm00cVdyS3ZDSFlmRng1TE52RHp1dHk0QkFPdDBfb2VOSWF4MDhtTl9GakJnaVpUSmdVajEyWEM3eTd4RHF6dVdlMHRudnRsSVh4UjB0QVNDcFBqUEpROGtHMEx3akQ5U2RWTE82S0hxYUw2eNIBtgFBVV95cUxNN0VtckVidkFXcHl4UHJELUswRTk3M0FBLUpCRy1PTTdpYjJhNnpaenRCbVhON2hRRE55QU9oZkRrR1ZiWGNRWTYtUTZZS0FKd2dfbGszc0tTeFZCUXZjaWdBUW9XRTI4RUhYemdHb1ItWGF0dTBNQUVoYThLNkVKOXZLYWFKbXk4MEQ2ZDR0V3hVdDZKc0JCZHVRVEVQeGRWWjAxUW50UldxcVBJd1BLdmFJd3ZUUQ?oc=5",
+  "date": 1781247600000,
+  "sig": 2,
+  "snippet": "East African Crude Oil Pipeline threatens wetlands, wildlife corridors: Report  news - Mongabay"
+ },
+ {
+  "name": "Front: Willow project Alaska drilling",
+  "title": "Trump Administration seeks to expedite oil drilling permits in Alaska – Bloomberg - Українські Національні Новини (УНН)",
+  "link": "https://news.google.com/rss/articles/CBMipAFBVV95cUxOcTZWWUNGOEhwRXNWMzltaGpmS1JFZU5qcTFWNzBBeWM1N3Voa0VWZFFkc1hXNG1NSGxzTWlsenM0OWFZb0FIWWFrYjFxZmNCWWE4ZjU2eVFURGdNdTdQUURIQkpYOWQ4RzgxdXNkdFlMd09CUHVUaWZRYkRKNWZiX3c2SDkxT3E4T1ZzQlJna0dua3lodVhtOFBjeHJxY0dNX2lHV9IBowFBVV95cUxNZG5uMjM2SEpieWJkc2NNY0ZTNEd6WnlJa3hJTUJrZlVSVVFORGcxOUpFcFZKVjUxZFdNUUxiaE1kaUJxbWRkRWpxWHU1REZ6eERIcUN3RGt3LVJFNTc5RHJCNjJVWUR5eFQxWkZNQzRYT0FVM19XSzEwYXpFZTdXVUV0bGpfNUFQQ0ZGUnE0cEcyNDdxVDA4S2pqeXBDX3VkelBn?oc=5",
+  "date": 1778828400000,
+  "sig": 2,
+  "snippet": "Trump Administration seeks to expedite oil drilling permits in Alaska – Bloomberg  Українські Національні Новини (УНН)"
+ },
+ {
+  "name": "Front: Resolution Copper Oak Flat",
+  "title": "Opinion: Copper mine is a critical investment in Arizona - Resolution Copper mine",
+  "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxPZTFIbEZWaWRIdDV5UDRIQk9YR216bjBZWEpKTzEtak9JTUg4MmR4eEJWVkNZMGNBdjZrcWJQa20weko5RWptN29VSVhNc2hUdkxLbGk3NXk2U0YxUVQwWkh2ZTJienNySTkySnRCLTRiMmIxUmh2TmNacHo2MlcycklwbFlOaXZqc2JPRDN3X0ZjUQ?oc=5",
+  "date": 1781161200000,
+  "sig": 2,
+  "snippet": "Opinion: Copper mine is a critical investment in Arizona  Resolution Copper mine"
+ },
+ {
+  "name": "Front: EACOP East African Crude Oil Pipeline",
+  "title": "Ugandan farmers sue to stop $5.6 billion East African Crude Oil Pipeline in UK court - Business Insider Africa",
+  "link": "https://news.google.com/rss/articles/CBMi1gFBVV95cUxOZm5xMDNiLW14NU1UYWxaeTZxTGo2SXdwdVMwZVBEWWVPbzFGd2ZsdjFTZTE3MWpVbE1SMUs0SVh2ckNBSE1wV08tal80YjAzbDhoTVFud2tNcjN0S2dtQUU0VHhqbWZ4LVNPbHMySU1RMUQtSk9lRnYySkliMm5qSWx0RUlBQWFKUHBQcXVUZjF5Qkw3elROV1NieHpQTjRYWWhFUG8zVUh6TTgtV1R1YW5lSWN1MVN2OUZNc292NDRiOUVzS0h5N3lHeGhRdlJ6aUgyM01R?oc=5",
+  "date": 1783407600000,
+  "sig": 2,
+  "snippet": "Ugandan farmers sue to stop $5.6 billion East African Crude Oil Pipeline in UK court  Business Insider Africa"
+ },
+ {
+  "name": "Front: EACOP East African Crude Oil Pipeline",
+  "title": "The East African Crude Oil Pipeline Is Almost Built. - Environment+Energy Leader",
+  "link": "https://news.google.com/rss/articles/CBMiqgFBVV95cUxPV3Q4NXNkSlM4RnZEYjVEQ2NPR09QNlVQUWtYY2QteGF3YmVVZENqajNwNTd4RUtMaWpCTHhjUWpCdE0zSVh3bHczLVgtYmFCbHp0LTF4QnVtc3lQYWRHdGxCdm1hV0h0THpoVGR2SDN1WTRSNEtMakdDV3pjdFl3eTVRN3dxcFEtcjFVZ2hLYWhlaWVzaDZXRzl2Nm1LbnNwVkRnTWlFRXRoQQ?oc=5",
+  "date": 1780988400000,
+  "sig": 2,
+  "snippet": "The East African Crude Oil Pipeline Is Almost Built.  Environment+Energy Leader"
+ },
+ {
+  "name": "Front: Cobre Panama mine",
+  "title": "Audit on Cobre Panama Copper Mine Shows 87.73% Compliance - Industrial Info Resources",
+  "link": "https://news.google.com/rss/articles/CBMiqwFBVV95cUxQSnZORGxyRWprMVp4Q0lXWlV3VTZ5VlQwNnFzRi1CXzdhVVVESS12SkdhbExDZnJ2b3NUNWtDWlBNUlQ0S2p2NW8yRWxQOFRTS1hwaUIxRkczS3dPNzBPaTM3akFWODdxa3JJZk9sd2lfd29TRUNXWlBDeW5LcnBRVFJyeDExdjdDdUxJcmpyNnN4cEdzUWw0bERkVV9GMzVBMGxlbHZpWGVjMHc?oc=5",
+  "date": 1782198000000,
+  "sig": 2,
+  "snippet": "Audit on Cobre Panama Copper Mine Shows 87.73% Compliance  Industrial Info Resources"
+ },
+ {
+  "name": "Front: Cobre Panama mine",
+  "title": "Panama and Canada are negotiating over a crucial copper mine - The Week",
+  "link": "https://news.google.com/rss/articles/CBMickFVX3lxTE03U3hGZ0NmZlFUN2RXRFNycmI0azBfNjQtZ1hKWENjNlE0WWQ2Mk1kakFGX210NXdlazF0Y0pGbFR2dDhjZEZ0Ni1xRW15amVOUldiSzBkZW9jQk9WbXd3akVaWGY1WTEtbHdPRUItS1RJdw?oc=5",
+  "date": 1769068800000,
+  "sig": 2,
+  "snippet": "Panama and Canada are negotiating over a crucial copper mine  The Week"
+ },
+ {
+  "name": "Front: Indonesia nickel mining Sulawesi deforestation",
+  "title": "Investors push for action to end deforestation and human rights risks in nickel mining - Reuters",
+  "link": "https://news.google.com/rss/articles/CBMi3gFBVV95cUxOTHA4dEhxcmdfQXpWNUNfaWI1MmljWFQ5UnVubGJmeVROYTBWT3Bxa0FyY2NHNDdmQm9XdWJUdmlseTF4Mzk2ekg1OGRPVUZ2Z19XY3NJaGYwZTJfRHctTXdPRnM3Y0VteW5Id3RkQkxDMEZRWllZSzVYVEZ5Y3VMc29XNWtWU05BRzd1WmN6WEdpRWMwZlBiVXdqT0xqS1lfWnNuV3cxemlqVXF3RnJ6V1Mtc1NIdHhzaHdDelEwa0hmUzh2YzB5U2QzNnc2RnAwN1RJZEI0anhsSGRhblE?oc=5",
+  "date": 1775631600000,
+  "sig": 2,
+  "snippet": "Investors push for action to end deforestation and human rights risks in nickel mining  Reuters"
+ },
+ {
+  "name": "Front: Papua palm oil deforestation",
+  "title": "Satellite images show deforestation for palm oil plantations has resumed in West Papua - eia-international.org",
+  "link": "https://news.google.com/rss/articles/CBMivwFBVV95cUxOdTQ2X1RNTUlQM1V0eHRiTnI3dDBrT2c0cWJYS2tIS29jbk9WUVFyM204a2g3SFNjcDFMRXVXY1dIMW5uRzdZSks2RWxUWmQxWWdtN0hleDlMYjE3a2VRQzZfazZOWXllb0w0RE9lcDFxMG9qazVxTU56MGdZSklBVC1YRU1KaTNtN1ZlMXFLTC13ZWUtSlZCMGlKZ09PSGhfQXlmWGY5VGM0bVVpVzJvbmJCTUxfcmRMaURaOFJWSQ?oc=5",
+  "date": 1648623600000,
+  "sig": 2,
+  "snippet": "Satellite images show deforestation for palm oil plantations has resumed in West Papua  eia-international.org"
+ },
+ {
+  "name": "Front: old growth logging protest",
+  "title": "With more old-growth logging set to begin near Fairy Creek, a new blockade has emerged to save the irreplaceable forests - Ricochet Media",
+  "link": "https://news.google.com/rss/articles/CBMi9gFBVV95cUxNWHJNUE1IRk5WbFZuM2hjTzQxUFA1SXJURWZodlh0TlBERzc4T0p6TFE3TktIMEtlYkV4eEpQdTQyaHI0OVhERU5CNlBoNHQxT2RaRlVRXzVGWFNHNmpSZW9VcE1RQjZXXzRWcnVNZUxLMmdQVjhZR1NlWTQyTU1KM3dMalNyeC1kc3djLUktLWFVYTgxU1ZiM3B6bk5MbG5wRDQyaEZBQ213bEtDaXJ4eDg5U3QxREpqUURsWXRjeGRCOWRBSWxKdlYzb3NfWTBhNGNSNjlZMUhTckE0ZjF6akdnWUJvQjNzQkRnYXNLZXkxNGhKQVE?oc=5",
+  "date": 1756105200000,
+  "sig": 2,
+  "snippet": "With more old-growth logging set to begin near Fairy Creek, a new blockade has emerged to save the irreplaceable forests  Ricochet Media"
+ },
+ {
+  "name": "Front: Mountain Valley Pipeline",
+  "title": "DEQ suspends MVP compressor station permit - WVTF",
+  "link": "https://news.google.com/rss/articles/CBMihgFBVV95cUxNMXlVeEpBVzExQTEyUm43cnhKZzE5UV9aZFMzWWdVOUFLVVNyUlpobGM0NHBwUzBWdWRMZzdHWGVWUzlzSDZ5N0tDNDFGN2dHTVZDcnJXVHFWOVJlZGpwajNnb0FOOG9kRm5TTEZ6bkNodG5fdU9ZcFJCZXFjSGxiOHVKMDFBdw?oc=5",
+  "date": 1783062000000,
+  "sig": 2,
+  "snippet": "DEQ suspends MVP compressor station permit  WVTF"
+ },
+ {
+  "name": "Front: Mountain Valley Pipeline",
+  "title": "FERC clears Mountain Valley Pipeline Southgate Project construction in North Carolina - WV News",
+  "link": "https://news.google.com/rss/articles/CBMi_wFBVV95cUxNQlFqdjBqVWtvcHZoZHd1cjI5X05EREM2c2FlaVFHTjUtcVZyS19PM3FpbXJMenl5ZU85TTR3OWNsbzNLUFIxaWpLcXRVNmJGdjdlOVoyQ20tZGNTN2lkMHVHMUpEaTd6TDQ1TVVpLUJqZW1CT0tibXFvN3R5UHpxWmVHaGE4OER5X0RvTkJyUWNVdkNNaWd2LW1aVy1td0Z6TzgtcUJselhxRVlZRi1fNVVzRzVwY1BmWVRETHZ1aF96SHltZDQ0OHAtQk9VeExrS1ZIbnBXcjVweXI1cUJ4ZlI5VEVkNTEwOEliUDYyZ1kzLUx4WW9lellPdmY2TEU?oc=5",
+  "date": 1782370800000,
+  "sig": 2,
+  "snippet": "FERC clears Mountain Valley Pipeline Southgate Project construction in North Carolina  WV News"
  }
 ]
