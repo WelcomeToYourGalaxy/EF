@@ -1,5 +1,5 @@
 name: Harvest portal federations (sharded)
-# 4 parallel shards, each taking every 4th portal of every federation list
+# 6 parallel shards, each taking every 6th portal of every federation list
 # (CKAN, ODS, GeoNode, DKAN, WFS, OGC API; uData on shard 0). Together the
 # shards cover 100% of the portals in one scheduled run, then a merge job
 # folds the parts into projects.json -- same pattern as the weekly OSM job.
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,7 +28,7 @@ jobs:
         env:
           PERMITSTACK_API_KEY: ${{ secrets.PERMITSTACK_API_KEY }}
           FED_SHARD: ${{ matrix.shard }}
-          FED_SHARDS: '4'
+          FED_SHARDS: '6'
           FED_SHARD_MAX_MIN: '315'
         run: python harvest_projects.py
       - uses: actions/upload-artifact@v4
