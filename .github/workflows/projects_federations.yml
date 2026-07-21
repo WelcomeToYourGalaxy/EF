@@ -1,17 +1,14 @@
 name: Harvest portal federations (sharded)
 # 4 parallel shards, each taking every 4th portal of every federation list
-# (CKAN 548, ODS 308, GeoNode 274, DKAN 104, WFS 987, OGC API 18, uData on
-# shard 0). Together the shards cover 100% of the portals in one scheduled
-# run (~20h of wall-clock in ~5.5h real time), then a merge job folds the
-# parts into projects.json -- the same pattern as the weekly OSM job.
+# (CKAN, ODS, GeoNode, DKAN, WFS, OGC API; uData on shard 0). Together the
+# shards cover 100% of the portals in one scheduled run, then a merge job
+# folds the parts into projects.json -- same pattern as the weekly OSM job.
 on:
   schedule:
-    - cron: "30 2 * * 1,4"   # Mon + Thu 02:30 UTC (offset from daily + OSM jobs)
+    - cron: '30 2 * * 1,4'    # Mon + Thu 02:30 UTC (offset from daily 08:00 job)
   workflow_dispatch: {}
-
 permissions:
   contents: write
-
 jobs:
   shard:
     runs-on: ubuntu-latest
@@ -24,11 +21,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install permitstack requests
       - name: Run federation shard
         env:
+          PERMITSTACK_API_KEY: ${{ secrets.PERMITSTACK_API_KEY }}
           FED_SHARD: ${{ matrix.shard }}
-          FED_SHARDS: "4"
+          FED_SHARDS: '4'
         run: python harvest_projects.py
       - uses: actions/upload-artifact@v4
         with:
@@ -45,20 +45,31 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install permitstack requests
       - uses: actions/download-artifact@v4
         with:
           pattern: fed-part-*
           merge-multiple: true
       - name: Merge shard parts into projects.json
         env:
-          FED_MERGE: "1"
+          FED_MERGE: '1'
         run: python harvest_projects.py
-      - name: Commit updated projects.json
+      - name: Commit if changed
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin HEAD || true
+          git config user.name  "projects-bot"
+          git config user.email "actions@users.noreply.github.com"
           git add projects.json
-          git diff --cached --quiet || git commit -m "federations refresh (sharded)"
-          git push
+          if git diff --staged --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "chore: refresh projects.json (federations)"
+          BR="$(git rev-parse --abbrev-ref HEAD)"
+          for i in 1 2 3 4 5; do
+            git fetch origin "$BR" || true
+            if git merge -X ours FETCH_HEAD -m "merge remote; keep fresh projects.json" && git push origin HEAD:"$BR"; then
+              echo "pushed"; exit 0
+            fi
+            git merge --abort 2>/dev/null || true
+            echo "push race, retry $i"; sleep 6
+          done
+          echo "push failed after retries"; exit 1
