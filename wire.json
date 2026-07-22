@@ -70,16 +70,6 @@
   "region": ""
  },
  {
-  "name": "Front: Line 5 pipeline",
-  "title": "State renews permit for Enbridge oil pipeline tunnel under Straits of Mackinac - Detroit Free Press",
-  "link": "https://news.google.com/rss/articles/CBMi1wFBVV95cUxQZ25aUmlBa2lJdEdpRFFlR3BSTFRFd29VdTYtSTJ2UVFFendPSS0xR0hmRS1sdkw5R25xOVhHZjVRWHlWMC0xUDZJU2dSWUJDOVgzbnNKWmU5R1piZWRsWmh5NU1YSl9naDNrbzd4MXN1MzRJcDRUMmNKeFBLZWlEb043NmJsaWg3UUFnSVpHZFp2RmVMRldDbl94QnJhaXBlekwtT3dQOTdJUmM4czExejktVjlwTzV5N2FfcS1Sa2hYT0gxMWNlYWZWZHRnWDZfYVdKTkFqcw?oc=5",
-  "date": 1784156364000,
-  "sig": 2,
-  "snippet": "State renews permit for Enbridge oil pipeline tunnel under Straits of Mackinac  Detroit Free Press",
-  "iso": null,
-  "region": ""
- },
- {
   "name": "Front: Resolution Copper Oak Flat",
   "title": "Copper mine opponents file new lawsuit to block Oak Flat project - AOL.com",
   "link": "https://news.google.com/rss/articles/CBMihAFBVV95cUxPM0lYc0thU2dacW42bDJEeGV1cG5hUlI5N3ZtMHE5LUZFX29GS0R3ZzdqU3VrX2NOeXdoN3FpUTBPLS01dTFDUTJqUURLMDRtLThXUVdPZ2YwVnhFMS1FVmZ6Tkw3WnZITGhKLXlNZGI2WkRBc0F0MFAzQk1YZHQ5aFItT3c?oc=5",
@@ -301,6 +291,16 @@
  },
  {
   "name": "Mongabay",
+  "title": "How to stitch a massive wildlife corridor through the Rocky Mountains",
+  "link": "https://news.mongabay.com/2026/07/how-to-stitch-a-massive-wildlife-corridor-through-the-rocky-mountains/",
+  "date": 1784722065000,
+  "sig": 2,
+  "snippet": "BRITISH COLUMBIA, Canada — On a sunny Thursday in May, Kent Kebe had to scrape yet another bighorn sheep carcass off Highway 93/95 running through Radium, British Columbia. The necropsy confirmed what Kebe, the village’s protective service manager, already knew: A car collision k",
+  "iso": "CA",
+  "region": "British Columbia"
+ },
+ {
+  "name": "Mongabay",
   "title": "Vietnam’s coffee boom fueled by decades of deforestation, report finds",
   "link": "https://news.mongabay.com/short-article/2026/07/vietnams-coffee-boom-fueled-by-decades-of-deforestation-report-finds/",
   "date": 1784704838000,
@@ -337,26 +337,6 @@
   "sig": 2,
   "snippet": "SÃO SEBASTIÃO, Brazil — In front of the house where she has lived for decades, Cosma da Silva points to nearby homes in her Itatinga neighborhood and lists a string of cancer cases. “There’s a woman with cancer over there. Another one lives in that building. And yet another one t",
   "iso": "BR",
-  "region": ""
- },
- {
-  "name": "Mongabay",
-  "title": "Extreme heat is eroding health, productivity and incomes of Dhaka’s informal workers",
-  "link": "https://news.mongabay.com/2026/07/extreme-heat-is-eroding-health-productivity-and-incomes-of-dhakas-informal-workers/",
-  "date": 1784639510000,
-  "sig": 2,
-  "snippet": "DHAKA — On June 28, as the afternoon sun beat down on Bangladesh capital Dhaka’s sprawling Tejgaon neighborhood, Samiha Begum gathered her two school-aged children and headed for the shade of Hatirjheel Lake. Their narrow one-room home in a nearby slum had become unbearable. She ",
-  "iso": "BD",
-  "region": ""
- },
- {
-  "name": "The Narwhal",
-  "title": "‘Industrial sacrifice zone’: the plan to bring oil supertankers to the mouth of the Fraser River",
-  "link": "https://thenarwhal.ca/alberta-pipepine-terminal-roberts-bank/?utm_source=rss",
-  "date": 1784203200000,
-  "sig": 2,
-  "snippet": "As governments look to expand Roberts Bank, scientists warn one of Canada's most important ecosystems for salmon, southern resident killer whales and migratory birds could pay the price",
-  "iso": "CA",
   "region": ""
  },
  {
@@ -510,6 +490,16 @@
   "region": "Michigan"
  },
  {
+  "name": "Front: Line 5 pipeline",
+  "title": "Opponents Vow to Fight On as Michigan Approves Tunnel for Line 5 Pipeline - The Energy Mix",
+  "link": "https://news.google.com/rss/articles/CBMipgFBVV95cUxOcUZpMHlJYmlqaV9vNW1odVlyYUVVWU5rOEFvRjVRN2Z4bGRONEVfQ0tyX3JDYVdVcjZOZ1NwQmF0R1dqTHI0RGNralpyb29VTnJETlBBWG1KV0p2YnIwdzVBYkhLUkFKNXhWeWk3M2tITUdfVFc0WXpybjluY05DSkdtNVM4MlFBMVhEeUhRSlJQSDlKZk53X0JEUEpkMFpQS1dVQVFR?oc=5",
+  "date": 1784326452000,
+  "sig": 2,
+  "snippet": "Opponents Vow to Fight On as Michigan Approves Tunnel for Line 5 Pipeline  The Energy Mix",
+  "iso": "US",
+  "region": "Michigan"
+ },
+ {
   "name": "Front: CP2 LNG terminal",
   "title": "Venture Global’s CP2 LNG Plant Costs Increase by $4 Billion - EnergyNow.com",
   "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxQb3FhbUE3cjlOeWN2d3JQVFBzdWhSVzE3SU1QNUlfRFQ4dUcxcllMVFE1WEh6MnRySWl4elBnSktWNmM4TXZDT3Frc0lrN1lRY3pBWlQ3WDZvYXNKUEh2TXVSWUx4azVpQy1YNlMwTF9ZZ2l4c3ZRQTBWdEpYbmJMV1hVb2lDUlpjaDNOSU5aWVJ3Zw?oc=5",
@@ -527,16 +517,6 @@
   "sig": 2,
   "snippet": "Trump administration launches first deep sea mining lease sale despite Pacific opposition  greenpeace.org",
   "iso": null,
-  "region": ""
- },
- {
-  "name": "Front: India Great Nicobar project",
-  "title": "India's Most Strategic Islands? Why Andaman And Nicobar Matter More Than Ever - News18",
-  "link": "https://news.google.com/rss/articles/CBMi1gFBVV95cUxOaXBHQlU2T3VPZ1VRcHFrLUMwOERjdjlrdWtoMFJvbkE2UzBkZC1tV0hJX1pyOEd2cXBTbUlVSnJwVGphUkpwMzlZdThhSnFjZjJYeDlwV2h2VjlvUTE5ZlZwbHdEN1BidVlsVG1pM1BkOFF3dDFpbkVhSldlR1hZT0dOWVcwWmViNGpxMXZRVVJtVy1RSXZYNkdtVlJjb2hlYUFjb2dkaTBZTkVqNHk3OEhVR0xDSHVRbjZ6N2J6a29nSzdVbmU5SGxpQ3RseDQzZzZ0UGln0gHbAUFVX3lxTFBlX3dkcTljMlFCdDk4STBPdU5rRkYtLXpmOHVHOExWdHRJMjJQVUxoRHhvbDNaUlptOVQ5NldMUTktZ2FiSGxaUmxYRXVCUlV6ak1iejdiOHJHUnhyTF9xaEJLdk01VVZQUVFpWWdidkVBUjZ2UzRldHozT19aeHJoT08yVUZaem1hYU5jVk51UU9hRmdRdE9SdGNhRGNDNjF3dmZZeFBUWFFkTjkyTElqdm1WbnJuSndqMWw3NkloR013elNtbG9vd2FjUW1iMU5yMXlkd1NCd2RiUQ?oc=5",
-  "date": 1784604720000,
-  "sig": 2,
-  "snippet": "India's Most Strategic Islands? Why Andaman And Nicobar Matter More Than Ever  News18",
-  "iso": "IN",
   "region": ""
  },
  {
@@ -571,21 +551,21 @@
  },
  {
   "name": "Front: Greece Skouries gold mine",
-  "title": "Eldorado crushes first ore at Skouries, eyes Q3 output - Mining.com",
-  "link": "https://news.google.com/rss/articles/CBMigwFBVV95cUxNY29aaGVINTktYnI1U2NpX0NSM1F2SU5zY3NVbFdtemx0N0ZuV1Y1YmFWWmRlalYzVE1NNElQLVRSZ0VpZi1ZMTBmRDNadkdtUE1kZ2l4QnFiT3RhSGVGLXVvYjJRR1cwQTRhOUotVnVqcGhXM3h4U1pwUHZhV2sxWjJRdw?oc=5",
-  "date": 1784642628000,
-  "sig": 2,
-  "snippet": "Eldorado crushes first ore at Skouries, eyes Q3 output  Mining.com",
-  "iso": null,
-  "region": ""
- },
- {
-  "name": "Front: Greece Skouries gold mine",
   "title": "Eldorado enters final commissioning stages of Skouries processing plant - Mining Weekly",
   "link": "https://news.google.com/rss/articles/CBMiuwFBVV95cUxQbEZDY1lTZS1FQlZpLTgxOG41VEFpSks3ZXRpU1laUWNMUjA2U1BMTFdwRW16cDZPTzBwclRwYUVSQzFqUlluMlRUUHBuTTVlRGtNRTZ5RnhjaEtZRS12NnRKV3BXdWo4MHlZMGwzU1ROU05sOXdnTzJtbmxJaHI1LXB3LUcwdi1haTgzSFpCb094T2toeEtTM2ktUmtnenVMemF0cFlxMWdtd29pbXRrdUhYUUpJLUhDYWk4?oc=5",
   "date": 1784624160000,
   "sig": 2,
   "snippet": "Eldorado enters final commissioning stages of Skouries processing plant  Mining Weekly",
+  "iso": null,
+  "region": ""
+ },
+ {
+  "name": "Front: Greece Skouries gold mine",
+  "title": "Eldorado crushes first ore at Skouries, eyes Q3 output - Mining.com",
+  "link": "https://news.google.com/rss/articles/CBMigwFBVV95cUxNY29aaGVINTktYnI1U2NpX0NSM1F2SU5zY3NVbFdtemx0N0ZuV1Y1YmFWWmRlalYzVE1NNElQLVRSZ0VpZi1ZMTBmRDNadkdtUE1kZ2l4QnFiT3RhSGVGLXVvYjJRR1cwQTRhOUotVnVqcGhXM3h4U1pwUHZhV2sxWjJRdw?oc=5",
+  "date": 1784642628000,
+  "sig": 2,
+  "snippet": "Eldorado crushes first ore at Skouries, eyes Q3 output  Mining.com",
   "iso": null,
   "region": ""
  },
@@ -597,6 +577,26 @@
   "sig": 2,
   "snippet": "Eldorado Gold crushes first ore at Skouries copper-gold project in Greece  Bitget",
   "iso": "GR",
+  "region": ""
+ },
+ {
+  "name": "Front: Australia Beetaloo fracking",
+  "title": "Government backs “disaster proposal” to power hyperscale data centre with fracked Beetaloo gas - Renew Economy",
+  "link": "https://news.google.com/rss/articles/CBMiwwFBVV95cUxPZV9VR2poRkNObDZhMkhnbWlIMnhTcHJlaHpaRS00MWFwRnBmLXRqVlBzWnl4ZzkxaG5la2J6eUtDMnNSTl9abmdHRU1hQmhkMmVkUGNjVmp5c1hkbWtRRnZreUJFcUJHVGpwRkpGOXVBVVhfN2gxN1lQT1Fnb3BDVlVvbm03SnNYVDJVdl80VEZQTGp2TjA5Y25QdUJhWHk5MmtHWlJYMElMRUV2amljakhoMTVjaHFhSXdFaEdkd1RldGfSAcMBQVVfeXFMT2VfVUdqaEZDTmw2YTJIZ21pSDJ4U3ByZWh6WkUtNDFhcEZwZi10alZQc1p5eGc5MWhuZWtienlLQzJzUk5fWm5nR0VNYUJoZDJlZFBjY1ZqeXNYZG1rUUZ2a3lCRXFCR1RqcEZKRjl1QVVYXzdoMTdZUE9RZ29wQ1ZVb25tN0pzWFQyVXZfNFRGUExqdk4wOWNuUHVCYVh5OTJrR1pSWDBJTEVFdmppY2pIaDE1Y2hxYUl3RWhHZHdUZXRn?oc=5",
+  "date": 1784690618000,
+  "sig": 2,
+  "snippet": "Government backs “disaster proposal” to power hyperscale data centre with fracked Beetaloo gas  Renew Economy",
+  "iso": null,
+  "region": ""
+ },
+ {
+  "name": "Front: old growth logging protest",
+  "title": "Forest wars ‘breakthrough’ as industry backs old growth ban - The Australian",
+  "link": "https://news.google.com/rss/articles/CBMihAJBVV95cUxQTDFhVmlSMHlPVWNpcUNKeGJfSm5OREpBUkZSSnpCemhFSE9RUEt6UllVT3pyOE5UaERsQ2p0UUh5bW1MbUIwajV5QldIZXFicTN1Rmp2c2xKY21GZmFBVTlxY1BIdjI0NWk4Y2RRVk1kcFdETmRzcXBGZmVrUG1ZRFBRNGZNdVA2RVNuelJBUG9wX2J6VnRiLWp1bVl1SERFYTAwd0ZUbDBBakVWVDV4akhxMThMQ2QwMzRxZzhVTWJ5MV80TnNxYTVEQVVLQ0ZMNjN2TDFyNXM5N28xVzlBVmhhUnA2Ym5ERnJRRm8talRxVkFnOC1ES2thYWtJck9YSlJ1QtIBigJBVV95cUxOT3dyUllwdW4ybUY0czluVmI0al9Wd0ZrMzI0Q1NDalNHVERkWEgxLUhSM1U0SXk0bHY1ZTVndWFfWUlvZ1BjUUdndzZkYlFSeUdvUE42amVZdVo2cVY2T1A4YmMyZ3I0Y3NLRzhZdWRMUG9DVzZ1YmZYblFnNktlcFJDWHg2NUQ4RHAtdlB5UF9MSm5VeXktOEdjQ1lwQ1lUOFNjNTF5TmxuZXRwNERHTHZYTTNjQ2FHcjZ3NHRhUUVFdE1MNHpXeGJzOEwxcDd1NjR2TWUwRVdud254Uzl4MmJhVThkc0NZLVA2cVdfNGVsUjBZaUdmTl8zLUJiT0JfMVpEWUExeVQ0Zw?oc=5",
+  "date": 1784124060000,
+  "sig": 2,
+  "snippet": "Forest wars ‘breakthrough’ as industry backs old growth ban  The Australian",
+  "iso": "AU",
   "region": ""
  }
 ]
