@@ -152,6 +152,10 @@ INVESTIGATIVE = [
     ("Climate Home News", "https://www.climatechangenews.com/feed/", 2, True),
     ("Guardian Environment", "https://www.theguardian.com/environment/rss", 2, True),
     ("Mongabay Latam", "https://es.mongabay.com/feed/", 2, True),
+    ("Mongabay India", "https://india.mongabay.com/feed/", 2, True),
+    ("Mongabay Africa", "https://africa.mongabay.com/feed/", 2, True),
+    ("The Third Pole", "https://www.thethirdpole.net/en/feed/", 2, True),
+    ("Down To Earth (India)", "https://www.downtoearth.org.in/rss", 2, True),
 ]
 FRONTS = [
     # A few high-profile US fights...
@@ -167,6 +171,41 @@ FRONTS = [
     "Amazon deforestation highway BR-319", "Trans Mountain pipeline Canada",
     "deep sea mining Pacific", "Balkans hydropower dam protest",
     "Hasdeo coal mine India", "Andes lithium mining protest",
+    # --- Broadened country/region coverage: real, high-profile land & environmental
+    # fights across every continent, so many more countries surface in the wire's
+    # region filter. Each is a named fight that geo-resolves to its country.
+    # Africa
+    "Sengwer eviction Kenya forest", "Lamu coal plant Kenya", "Ogoni Shell cleanup Nigeria",
+    "Niger Delta oil spill", "TotalEnergies Mozambique LNG Cabo Delgado", "Congo peatland oil auction",
+    "Tanzania Uganda EACOP pipeline", "South Africa Wild Coast Shell seismic", "Xolobeni titanium mine",
+    "Ghana bauxite Atewa forest", "Zambia copper mine pollution", "Zimbabwe Hwange coal",
+    "Botswana Okavango oil drilling", "Madagascar mine Base Toliara", "Morocco Western Sahara phosphate",
+    "DRC cobalt mining", "Ethiopia Gibe dam", "Senegal Bargny coal plant",
+    # Asia
+    "Philippines Kaliwa dam", "Philippines nickel mining Palawan", "Indonesia Rempang eco city eviction",
+    "Indonesia Wadas quarry", "India Hasdeo Aranya coal", "India Great Nicobar project",
+    "India Mumbai coastal road Aarey", "Bangladesh Rampal power plant Sundarbans", "Nepal Nijgadh airport forest",
+    "Cambodia Koh Kong Cardamom", "Myanmar Myitsone dam", "Thailand Mekong dam protest",
+    "Vietnam coal power Mekong delta", "Japan Henoko base landfill Okinawa", "South Korea Jeju naval base",
+    "Malaysia Baram dam Sarawak", "Pakistan Reko Diq mine", "Sri Lanka Adani wind Mannar",
+    "Mongolia Oyu Tolgoi mine water", "Kazakhstan uranium mining",
+    # Latin America
+    "Peru Conga mine", "Peru Tia Maria copper", "Bolivia lithium Salar de Uyuni",
+    "Chile Dominga mine", "Chile Escondida water", "Argentina lithium Salinas Grandes",
+    "Argentina Mendoza mining law protest", "Ecuador Yasuni oil drilling", "Ecuador Intag mining",
+    "Colombia Hidroituango dam", "Brazil Belo Monte dam", "Brazil Ferrogrão railway Amazon",
+    "Mexico Maya Train Tren Maya", "Mexico Dos Bocas refinery", "Panama Donoso copper mine",
+    "Guatemala Escobal silver mine", "Honduras Guapinol river", "Venezuela Arco Minero Orinoco",
+    # Europe
+    "Serbia Rio Tinto Jadar lithium", "Portugal Barroso lithium mine", "Spain Aguas Tenidas mine",
+    "Norway Fosen wind Sami", "Sweden Kallak iron mine", "Finland Terrafame mine",
+    "Germany Lützerath coal mine", "France A69 motorway protest", "Italy TAP pipeline",
+    "Greece Skouries gold mine", "Romania Rosia Montana", "Poland Turów coal mine",
+    "UK Cumbria coal mine", "Ireland LNG Shannon",
+    # Middle East / Caucasus / Pacific
+    "Turkey Mount Ida gold mine Kaz", "Turkey Akbelen forest coal", "Armenia Amulsar gold mine",
+    "Georgia Namakhvani dam", "Iran Karun dam", "Papua New Guinea Wafi Golpu mine",
+    "Fiji seabed mining", "Australia Beetaloo fracking", "New Zealand seabed mining Taranaki",
     # generic global fronts (region-neutral phrasing)
     "Indigenous land defenders mine pipeline", "old growth logging protest",
     "LNG terminal opposition", "pipeline blockade protest",
