@@ -100,6 +100,16 @@
   "region": "Louisiana"
  },
  {
+  "name": "Guardian Environment",
+  "title": "Legal logging and soaring saplings: the ‘green islands’ bucking the deforestation trend in central America",
+  "link": "https://www.theguardian.com/environment/2026/jul/23/guatemala-small-communities-restorative-forestation-aoe",
+  "date": 1784800841000,
+  "sig": 2,
+  "snippet": "In Guatemala’s Maya biosphere reserve local people are making a living from trees at the same time as increasing forest cover, showing nature is best protected by those who depend on itThe low rumbling grows louder until a huge harvester crashes into the open, dragging a 15-metre",
+  "iso": "GL",
+  "region": ""
+ },
+ {
   "name": "Mongabay India",
   "title": "West coast fishers confront ‘ghost gear’ problem",
   "link": "https://india.mongabay.com/2026/07/west-coast-fishers-confront-ghost-gear-problem/",
@@ -151,12 +161,12 @@
  },
  {
   "name": "Front: deep sea mining Pacific",
-  "title": "American Samoans voice opposition to deep-sea mining - ABC News & Headlines – Australian Broadcasting Corporation",
-  "link": "https://news.google.com/rss/articles/CBMid0FVX3lxTE9najNXbldLbmRja1hiSlVUN0ZJS0tPcnRZUEZIWW9GVmRiTm9Jc0I5QWEtZXE0T0dELTRBWmlBel9EQWI5NzFVcHpZalJXUm9xRVBTaloxbEZJVnNHaVFiYlBtNjZUdXpVdmNtbFpNS2RmYkJ4R2Q0?oc=5",
-  "date": 1784750400000,
+  "title": "Activists protest Pacific deep-sea mining by Swiss-based firm - SWI swissinfo.ch",
+  "link": "https://news.google.com/rss/articles/CBMiqwFBVV95cUxNeW53LXVxUUE4RXBaelJ4YU5pOVh6cnZTb290ZTl0ZHJoVFNrb1NhR3NSSVJkWTNFYkhMcW1GeWthaC1uNkRvTGVyYkpoeUdPam04ZGthSC1qLXU1M0hhSGlEU3F0OEtRLUMwbGZZQmJPQ2VEUGNYc0YwZDdKTkYwN0JwSzNaNTcwUlc2TldjMUpGYUxWSHBWM0Y0M0pqYVhYdENQazA2ejNJYkk?oc=5",
+  "date": 1784451900000,
   "sig": 2,
-  "snippet": "American Samoans voice opposition to deep-sea mining  ABC News & Headlines – Australian Broadcasting Corporation",
-  "iso": "GL",
+  "snippet": "Activists protest Pacific deep-sea mining by Swiss-based firm  SWI swissinfo.ch",
+  "iso": "CH",
   "region": ""
  },
  {
@@ -177,6 +187,16 @@
   "sig": 2,
   "snippet": "Eldorado Gold feeds first ore through crushing circuit at Skouries copper-gold project  International Mining",
   "iso": "GL",
+  "region": ""
+ },
+ {
+  "name": "Grist",
+  "title": "How war in Myanmar is driving a deadly rare earth mining boom",
+  "link": "https://grist.org/international/myanmar-war-rare-earth-mining-landslide-labor/",
+  "date": 1784796300000,
+  "sig": 2,
+  "snippet": "",
+  "iso": "MM",
   "region": ""
  },
  {
@@ -218,16 +238,6 @@
   "snippet": "",
   "iso": "US",
   "region": "Michigan"
- },
- {
-  "name": "Grist",
-  "title": "Data centers are booming. Indigenous leaders want help protecting their lands.",
-  "link": "https://grist.org/global-indigenous-affairs-desk/data-centers-are-booming-indigenous-leaders-want-help-protecting-their-lands/",
-  "date": 1784199600000,
-  "sig": 2,
-  "snippet": "",
-  "iso": null,
-  "region": ""
  },
  {
   "name": "Mongabay",
@@ -501,6 +511,16 @@
  },
  {
   "name": "Front: Cobre Panama mine",
+  "title": "Panama mulls state miner to revive Cobre Panama - The Northern Miner",
+  "link": "https://news.google.com/rss/articles/CBMimgFBVV95cUxORlI0Y0o5X0l2MVpSODY2d2hlQ2lTLTQtX1lycUl4SHNPX2RENzdlcEZpNGE1VXFHLTFfQU5DSjk5dGVsTUNYcHE2OUwyUlpVRVdJc3EydVhNbEZMVUE3RE9namxUaEFRQTJiQ0ZPWVlyTGpqWFlNSnpGNHRPS0JDYnlpWTRHdUNfM0xZQ3p3SWxGMWVpZEw4THZB?oc=5",
+  "date": 1784814053000,
+  "sig": 2,
+  "snippet": "Panama mulls state miner to revive Cobre Panama  The Northern Miner",
+  "iso": "PA",
+  "region": ""
+ },
+ {
+  "name": "Front: Cobre Panama mine",
   "title": "Panama may create state-owned miner as First Quantum partner for Cobre Panama reopening - Reuters - Seeking Alpha",
   "link": "https://news.google.com/rss/articles/CBMi0AFBVV95cUxPRDNoQ2Nwc2tRaFRMOVA3SVBTVnJ0RTZuZ3pIUUxPUEpsVEpKUkwtQno1NTRBSWpRVVBoVWFqaW5SZ1psLXExN2pwZkdwTlNZclRrdU1wM1ZNRlhjcEJ1cFhSREJ2WUluS0JTTDQ4RXdvR0VoaU1hdkxtcFdYZWdhTW11LUdITld3b2lSc3hXQzF1QmRZV2l2R241OURQY0ZpZ1AzYi02b01GUy14d215WVJVYzBUSGNOZXItZy13cmdVNVVybGhXQUVNODJGVnpE?oc=5",
   "date": 1784737355000,
@@ -530,6 +550,16 @@
   "region": ""
  },
  {
+  "name": "Front: DRC cobalt mining",
+  "title": "DR Congo orders Western and Asian mining titans to surrender local equity or face sanctions - Business Insider Africa",
+  "link": "https://news.google.com/rss/articles/CBMi0AFBVV95cUxQV1lkVUtBakRCek1vSDZXSFduRWVBZlVfcjVmd3BHQ2RhYkZFZG1URGxwc1UxX0hJSmFWR3VnWXdKMHNXYzlWVHQ2UGR2clRoQTJIRkViaHR5WktsbHNJLXp4emRBZ09CV0NDczVDTEJQUUxvV0V3T3lZUjVjMmxWRF9Vb2hJLUZ3WnNpM19zY20yUTdKelJneWQ3V3praVdmLUZfLU1pRE1ibTFORjR5bDVJRkFyLVM0Vjg5OTBldFI5akFiTXhvNlpMdWJ6LUVn?oc=5",
+  "date": 1784808023000,
+  "sig": 2,
+  "snippet": "DR Congo orders Western and Asian mining titans to surrender local equity or face sanctions  Business Insider Africa",
+  "iso": "CD",
+  "region": ""
+ },
+ {
   "name": "Front: Myanmar Myitsone dam",
   "title": "Activists Urge Nationwide Resistance Against Myanmar Junta’s Plan to Revive Controversial Myitsone Dam - Burma News International",
   "link": "https://news.google.com/rss/articles/CBMixwFBVV95cUxQdWdGV25qU2pzWXhsd1ZrZXA4bVluWUVsNl9YU3p3SERXZXlkd2tDZVYtUFNNQWMtbk1UYUpmaHUxNmtmblYtZ2ZqNzY3M0lQMll1TERBZnRMcHNRMkZyTXNtSld2VG5helBZWTNYaUl0b3RsdGxrREdUN25kS2Q5QjcydDQ1eHRhMV9Ic0o5ekFNMzlPSjJkeVpGeXBQUmFSMktlMUt2TnN5aWp2d3owRE1hZURuSVhkdElhU09QZ0ZXRndhYkVV?oc=5",
@@ -550,6 +580,16 @@
   "region": ""
  },
  {
+  "name": "Front: Argentina lithium Salinas Grandes",
+  "title": "DuPont introduces integrated direct lithium extraction portfolio - Filtration and Separation",
+  "link": "https://news.google.com/rss/articles/CBMioAFBVV95cUxOSjBRbU9vRXBxQjJhTGROWldzeTM2X3EyU3R6N0d3Xy1wdC1ZZ2QteWlCeEdVcUcwWm1ad3Z3LWJpd1ZYTnFKdWJJNXRkdFE4djdyRUwwVFFhaG1pZVJIRUpXWE40WmdENjE1SGtDT3dFeVNpN21IdmdRVzI2THhPNGZvRjRRUEQ2VC1NQmpwdkFpMGo0cjN2REhYRHQwX05u?oc=5",
+  "date": 1784806583000,
+  "sig": 2,
+  "snippet": "DuPont introduces integrated direct lithium extraction portfolio  Filtration and Separation",
+  "iso": null,
+  "region": ""
+ },
+ {
   "name": "Front: Greece Skouries gold mine",
   "title": "Eldorado enters final commissioning stages of Skouries processing plant - Mining Weekly",
   "link": "https://news.google.com/rss/articles/CBMiuwFBVV95cUxQbEZDY1lTZS1FQlZpLTgxOG41VEFpSks3ZXRpU1laUWNMUjA2U1BMTFdwRW16cDZPTzBwclRwYUVSQzFqUlluMlRUUHBuTTVlRGtNRTZ5RnhjaEtZRS12NnRKV3BXdWo4MHlZMGwzU1ROU05sOXdnTzJtbmxJaHI1LXB3LUcwdi1haTgzSFpCb094T2toeEtTM2ktUmtnenVMemF0cFlxMWdtd29pbXRrdUhYUUpJLUhDYWk4?oc=5",
@@ -557,46 +597,6 @@
   "sig": 2,
   "snippet": "Eldorado enters final commissioning stages of Skouries processing plant  Mining Weekly",
   "iso": null,
-  "region": ""
- },
- {
-  "name": "Front: Greece Skouries gold mine",
-  "title": "Eldorado crushes first ore at Skouries, eyes Q3 output - Mining.com",
-  "link": "https://news.google.com/rss/articles/CBMigwFBVV95cUxNY29aaGVINTktYnI1U2NpX0NSM1F2SU5zY3NVbFdtemx0N0ZuV1Y1YmFWWmRlalYzVE1NNElQLVRSZ0VpZi1ZMTBmRDNadkdtUE1kZ2l4QnFiT3RhSGVGLXVvYjJRR1cwQTRhOUotVnVqcGhXM3h4U1pwUHZhV2sxWjJRdw?oc=5",
-  "date": 1784642628000,
-  "sig": 2,
-  "snippet": "Eldorado crushes first ore at Skouries, eyes Q3 output  Mining.com",
-  "iso": null,
-  "region": ""
- },
- {
-  "name": "Front: Greece Skouries gold mine",
-  "title": "Eldorado Gold crushes first ore at Skouries copper-gold project in Greece - Bitget",
-  "link": "https://news.google.com/rss/articles/CBMiakFVX3lxTE5fU3FJblpOWmRfNHE1a3kyUGphaDJKSnozRnVBZFdTT3c5b2ZGcld0WVpjTVQyblZZX0gyYnE0YTBpRXViYUp0S29ZSUJFdGkwVjJoaDhZZTVIZGUzMUlxMGpvU01WVFd0aXfSAWpBVV95cUxOX1NxSW5aTlpkXzRxNWt5MlBqYWgySkp6M0Z1QWRXU093OW9mRnJXdFlaY01UMm5WWV9IMmJxNGEwaUV1YmFKdEtvWUlCRXRpMFYyaGg4WWU1SGRlMzFJcTBqb1NNVlRXdGl3?oc=5",
-  "date": 1784584826000,
-  "sig": 2,
-  "snippet": "Eldorado Gold crushes first ore at Skouries copper-gold project in Greece  Bitget",
-  "iso": "GR",
-  "region": ""
- },
- {
-  "name": "Front: Australia Beetaloo fracking",
-  "title": "Government backs “disaster proposal” to power hyperscale data centre with fracked Beetaloo gas - Renew Economy",
-  "link": "https://news.google.com/rss/articles/CBMiwwFBVV95cUxPZV9VR2poRkNObDZhMkhnbWlIMnhTcHJlaHpaRS00MWFwRnBmLXRqVlBzWnl4ZzkxaG5la2J6eUtDMnNSTl9abmdHRU1hQmhkMmVkUGNjVmp5c1hkbWtRRnZreUJFcUJHVGpwRkpGOXVBVVhfN2gxN1lQT1Fnb3BDVlVvbm03SnNYVDJVdl80VEZQTGp2TjA5Y25QdUJhWHk5MmtHWlJYMElMRUV2amljakhoMTVjaHFhSXdFaEdkd1RldGfSAcMBQVVfeXFMT2VfVUdqaEZDTmw2YTJIZ21pSDJ4U3ByZWh6WkUtNDFhcEZwZi10alZQc1p5eGc5MWhuZWtienlLQzJzUk5fWm5nR0VNYUJoZDJlZFBjY1ZqeXNYZG1rUUZ2a3lCRXFCR1RqcEZKRjl1QVVYXzdoMTdZUE9RZ29wQ1ZVb25tN0pzWFQyVXZfNFRGUExqdk4wOWNuUHVCYVh5OTJrR1pSWDBJTEVFdmppY2pIaDE1Y2hxYUl3RWhHZHdUZXRn?oc=5",
-  "date": 1784690618000,
-  "sig": 2,
-  "snippet": "Government backs “disaster proposal” to power hyperscale data centre with fracked Beetaloo gas  Renew Economy",
-  "iso": null,
-  "region": ""
- },
- {
-  "name": "Front: Peru Tia Maria copper",
-  "title": "Peru pulls permit for $1.8B Tia Maria copper mine - Mining.com",
-  "link": "https://news.google.com/rss/articles/CBMifEFVX3lxTE9FZUZJMVVoeVp0Ykh1VGpnM24tZjZQM181TTJtVlQ4a1U1elRfY2w3dnZYNUJxcVNOZ2lqMFFkRExHX0c2dXdzVmNQUUV4Q1dWZ25Hb1B1ZlNvd3Rqd1NITUUtYjhxZUdWRmJCSUJvZ3h6UVlNREVlMjhaaXI?oc=5",
-  "date": 1775804400000,
-  "sig": 2,
-  "snippet": "Peru pulls permit for $1.8B Tia Maria copper mine  Mining.com",
-  "iso": "PE",
   "region": ""
  }
 ]
