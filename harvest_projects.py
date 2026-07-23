@@ -2928,8 +2928,9 @@ def fetch_nsw_major(pages=12, per=1000):
             break
         if fields is None:                                    # runtime field detection
             cols = list((feats[0].get("properties") or {}).keys())
+            _rows = [(f.get("properties") or {}) for f in feats[:60]]
             fields = {
-                "name":   _sniff_col(cols, "name", "project", "title") or "Name",
+                "name":   _sniff_name_col(cols, _rows, "name", "project", "title") or "Name",
                 "status": _sniff_col(cols, "case_status", "status", "stage") or "Case_status",
                 "type":   _sniff_col(cols, "developmenttype", "type", "category", "class", "purpose"),
                 "who":    _sniff_col(cols, "applicant", "proponent", "developer", "company"),
@@ -3015,8 +3016,9 @@ def fetch_qld_coordinated(pages=8, per=2000):
             break
         if fields is None:
             cols = list((feats[0].get("properties") or {}).keys())
+            _rows = [(f.get("properties") or {}) for f in feats[:60]]
             fields = {
-                "name":   _sniff_col(cols, "name", "project", "title") or "name",
+                "name":   _sniff_name_col(cols, _rows, "name", "project", "title") or "name",
                 "status": _sniff_col(cols, "status", "stage", "phase", "progress"),
                 "type":   _sniff_col(cols, "type", "category", "sector", "class"),
                 "who":    _sniff_col(cols, "proponent", "applicant", "developer", "company"),
@@ -3108,8 +3110,9 @@ def fetch_bc_eao(pages=10, per=1000):
             break
         if fields is None:
             cols = list((feats[0].get("properties") or {}).keys())
+            _rows = [(f.get("properties") or {}) for f in feats[:60]]
             fields = {
-                "name":   _sniff_col(cols, "project_name", "name", "proj", "title"),
+                "name":   _sniff_name_col(cols, _rows, "project_name", "name", "proj", "title"),
                 "status": _sniff_col(cols, "status", "phase", "stage", "current_phase", "disposition"),
                 "type":   _sniff_col(cols, "type", "category", "sector", "purpose"),
                 "who":    _sniff_col(cols, "proponent", "applicant", "developer", "company"),
@@ -3190,8 +3193,9 @@ def fetch_sask_eia(per=2000):
                 break
             if fields is None:
                 cols = list((feats[0].get("properties") or {}).keys())
+                _rows = [(f.get("properties") or {}) for f in feats[:60]]
                 fields = {
-                    "name":   _sniff_col(cols, "project", "name", "title", "proposal"),
+                    "name":   _sniff_name_col(cols, _rows, "project", "name", "title", "proposal"),
                     "status": _sniff_col(cols, "status", "stage", "phase", "decision"),
                     "type":   _sniff_col(cols, "type", "category", "sector", "class", "nature"),
                     "who":    _sniff_col(cols, "proponent", "applicant", "developer", "company", "owner"),
@@ -3274,8 +3278,9 @@ def fetch_ireland_eia(pages=10, per=2000):
             break
         if fields is None:
             cols = list((feats[0].get("properties") or {}).keys())
+            _rows = [(f.get("properties") or {}) for f in feats[:60]]
             fields = {
-                "name":   _sniff_col(cols, "project", "development", "name", "title", "proposal"),
+                "name":   _sniff_name_col(cols, _rows, "project", "development", "name", "title", "proposal"),
                 "status": _sniff_col(cols, "decision", "status", "stage", "outcome", "determination"),
                 "type":   _sniff_col(cols, "type", "class", "category", "nature", "annex"),
                 "who":    _sniff_col(cols, "applicant", "developer", "proponent", "company"),
@@ -3295,9 +3300,10 @@ def fetch_ireland_eia(pages=10, per=2000):
                 if sl and any(d in sl for d in _IE_DEAD):     # fail-safe: drop decided rows
                     continue
                 name = (str(pr.get(fields["name"]) or "").strip()[:140] if fields["name"] else "")
-                if not name: name = "EIA development"
                 typ = (str(pr.get(fields["type"]) or "").strip()[:60] if fields["type"] else "")
                 who = (str(pr.get(fields["who"]) or "").strip()[:80] if fields["who"] else "")
+                name = _clean_proj_name(name, typ, who)      # never publish "Yes."/"No."
+                if not name: name = "EIA development"
                 auth = (str(pr.get(fields["auth"]) or "").strip() if fields["auth"] else "")
                 url = (str(pr.get(fields["url"]) or "").strip() if fields["url"] else "")
                 if not url.startswith("http"):
@@ -3821,6 +3827,77 @@ def _sniff_col(cols, *pats):
         for c in cols:
             if pat in str(c).lower(): return c
     return None
+
+
+# --- name-column picking that actually looks at the VALUES ---------------
+# Matching only on column NAME lets a boolean flag column (e.g. an "EIA_Project"
+# Y/N field) win the "project" pattern and become every row's title, which is how
+# "Yes."/"No." project names got published. These helpers validate the contents.
+_JUNK_NAME_VALS = {"", "yes", "no", "y", "n", "true", "false", "none", "n/a", "na",
+                   "null", "nil", "unknown", "not applicable", "tbd", "-", "--",
+                   "0", "1", "other", "misc", "various"}
+
+
+def _looks_like_name(v):
+    s = str(v if v is not None else "").strip().strip(".")
+    if not s:
+        return False
+    if s.lower() in _JUNK_NAME_VALS:
+        return False
+    if len(s) < 4:
+        return False
+    if s.replace(".", "").replace("-", "").replace(" ", "").isdigit():
+        return False
+    return bool(re.search(r"[A-Za-z]{3,}", s))
+
+
+def _name_col_score(rows, c):
+    vals = [r.get(c) for r in rows if isinstance(r, dict)]
+    vals = [v for v in vals if str(v if v is not None else "").strip() != ""]
+    if not vals:
+        return 0.0, 0.0
+    good = sum(1 for v in vals if _looks_like_name(v))
+    avg = sum(len(str(v).strip()) for v in vals) / float(len(vals))
+    return good / float(len(vals)), avg
+
+
+def _sniff_name_col(cols, rows, *pats):
+    """Pick a title column by pattern priority, but only if its values look like
+    names. Falls back to the most title-like column present. Returns None rather
+    than hand back a Y/N flag column."""
+    rows = [r for r in (rows or []) if isinstance(r, dict)][:60]
+    if not rows:
+        return _sniff_col(cols, *pats)
+    seen = []
+    for pat in pats:
+        for c in cols:
+            if pat in str(c).lower() and c not in seen:
+                seen.append(c)
+    for c in seen:                      # honour pattern priority first
+        sc, avg = _name_col_score(rows, c)
+        if sc >= 0.6 and avg >= 5:
+            return c
+    best, best_key = None, None         # otherwise: best title-like column anywhere
+    for c in cols:
+        sc, avg = _name_col_score(rows, c)
+        if sc >= 0.75 and avg >= 8:
+            key = (sc, min(avg, 80))
+            if best_key is None or key > best_key:
+                best, best_key = c, key
+    return best
+
+
+def _clean_proj_name(nm, *fallbacks):
+    """Never publish a junk value as a project title; build a readable label."""
+    s = str(nm if nm is not None else "").strip()
+    if _looks_like_name(s):
+        return s[:140]
+    bits = []
+    for b in fallbacks:
+        b = str(b if b is not None else "").strip()
+        if b and b.lower() not in _JUNK_NAME_VALS and b not in bits:
+            bits.append(b)
+    return (" \u2014 ".join(bits[:2]))[:140] if bits else ""
 
 
 _BR_CENTER = (-14.24, -51.93)
