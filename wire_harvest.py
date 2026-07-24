@@ -210,10 +210,24 @@ FRONTS = [
     "Indigenous land defenders mine pipeline", "old growth logging protest",
     "LNG terminal opposition", "pipeline blockade protest",
 ]
+# How far back the wire reaches. Google News queries are bounded with when:<N>d and
+# every item -- from search or from a site's RSS -- is dropped if it is older, so the
+# window stated in the panel is the window actually published.
+WIRE_MAX_AGE_DAYS = int(os.environ.get("WIRE_MAX_AGE_DAYS", "30"))
+
+
+def _too_old(date_ms):
+    try:
+        return (time.time() * 1000 - float(date_ms)) > WIRE_MAX_AGE_DAYS * 86400000.0
+    except Exception:
+        return False
+
+
 def google_news(q):
     from urllib.parse import quote
     return ("Front: " + q,
-            "https://news.google.com/rss/search?q=%s&hl=en-US&gl=US&ceid=US:en" % quote(q),
+            "https://news.google.com/rss/search?q=%s+when:%dd&hl=en-US&gl=US&ceid=US:en"
+            % (quote(q), WIRE_MAX_AGE_DAYS),
             2, True)
 
 ALLOW = [
@@ -284,8 +298,300 @@ def collect():
     items.sort(key=lambda x: -x["score"])
     return items
 
+
+# --- per-region sweep -------------------------------------------------------
+# The wire used to run topic queries and then guess a region from keywords, so a
+# region only ever appeared if some generic story happened to mention it. This
+# list drives one query PER region instead, and tags each item with that ISO
+# directly -- every region gets its own feed rather than a share of a global pool.
+_WIRE_REGIONS = {
+"USA": "United States",
+"CAN": "Canada",
+"COL": "Colombia",
+"ARG": "Argentina",
+"CHL": "Chile",
+"BRA": "Brazil",
+"MEX": "Mexico",
+"GTM": "Guatemala",
+"ECU": "Ecuador",
+"PER": "Peru",
+"CRI": "Costa Rica",
+"HND": "Honduras",
+"VEN": "Venezuela",
+"PAN": "Panama",
+"DOM": "Dominican Republic",
+"GBR": "United Kingdom",
+"DEU": "Germany",
+"FRA": "France",
+"ITA": "Italy",
+"ESP": "Spain",
+"GRC": "Greece",
+"CZE": "Czech Republic",
+"IRL": "Ireland",
+"AUT": "Austria",
+"NLD": "Netherlands",
+"DNK": "Denmark",
+"NOR": "Norway",
+"SWE": "Sweden",
+"POL": "Poland",
+"ROU": "Romania",
+"SRB": "Serbia",
+"UKR": "Ukraine",
+"HUN": "Hungary",
+"SVK": "Slovakia",
+"LUX": "Luxembourg",
+"ALB": "Albania",
+"GEO": "Georgia",
+"MDA": "Moldova",
+"BIH": "Bosnia and Herzegovina",
+"XKX": "Kosovo",
+"MKD": "North Macedonia",
+"MNE": "Montenegro",
+"KEN": "Kenya",
+"ZAF": "South Africa",
+"GHA": "Ghana",
+"NGA": "Nigeria",
+"TUN": "Tunisia",
+"MAR": "Morocco",
+"UGA": "Uganda",
+"TZA": "Tanzania",
+"ISR": "Israel",
+"JOR": "Jordan",
+"LBN": "Lebanon",
+"IND": "India",
+"MYS": "Malaysia",
+"JPN": "Japan",
+"KOR": "South Korea",
+"TWN": "Taiwan",
+"PHL": "Philippines",
+"ARM": "Armenia",
+"AUS": "Australia",
+"NZL": "New Zealand",
+"HRV": "Croatia",
+"CHE": "Switzerland",
+"BEL": "Belgium",
+"BGR": "Bulgaria",
+"EST": "Estonia",
+"FIN": "Finland",
+"PRT": "Portugal",
+"LVA": "Latvia",
+"LTU": "Lithuania",
+"ISL": "Iceland",
+"SVN": "Slovenia",
+"CYP": "Cyprus",
+"PAK": "Pakistan",
+"LKA": "Sri Lanka",
+"BGD": "Bangladesh",
+"THA": "Thailand",
+"IDN": "Indonesia",
+"SGP": "Singapore",
+"URY": "Uruguay",
+"BOL": "Bolivia",
+"SLV": "El Salvador",
+"PRY": "Paraguay",
+"ZMB": "Zambia",
+"EGY": "Egypt",
+"SEN": "Senegal",
+"RWA": "Rwanda",
+"ETH": "Ethiopia",
+"FJI": "Fiji",
+"PNG": "Papua New Guinea",
+"TUR": "Turkey",
+"MLT": "Malta",
+"RUS": "Russia",
+"BLR": "Belarus",
+"AZE": "Azerbaijan",
+"MNG": "Mongolia",
+"MDV": "Maldives",
+"PSE": "Palestine",
+"IRQ": "Iraq",
+"KAZ": "Kazakhstan",
+"KWT": "Kuwait",
+"KGZ": "Kyrgyzstan",
+"NPL": "Nepal",
+"KHM": "Cambodia",
+"TLS": "Timor-Leste",
+"ZWE": "Zimbabwe",
+"LBR": "Liberia",
+"MWI": "Malawi",
+"MOZ": "Mozambique",
+"SLE": "Sierra Leone",
+"BWA": "Botswana",
+"MUS": "Mauritius",
+"BFA": "Burkina Faso",
+"MDG": "Madagascar",
+"COD": "DRC (Congo)",
+"SSD": "South Sudan",
+"NAM": "Namibia",
+"HTI": "Haiti",
+"TTO": "Trinidad & Tobago",
+"SUR": "Suriname",
+"JAM": "Jamaica",
+"GUY": "Guyana",
+"VUT": "Vanuatu",
+"SLB": "Solomon Islands",
+"CUB": "Cuba",
+"NIC": "Nicaragua",
+"CHN": "China",
+"IRN": "Iran",
+"CIV": "Côte d’Ivoire",
+"CMR": "Cameroon",
+"BEN": "Benin",
+"VNM": "Vietnam",
+"BTN": "Bhutan",
+"CPV": "Cabo Verde",
+"GMB": "Gambia",
+"TGO": "Togo",
+"AND": "Andorra",
+"ATG": "Antigua and Barbuda",
+"BHS": "Bahamas",
+"BRB": "Barbados",
+"BLZ": "Belize",
+"DMA": "Dominica",
+"GRD": "Grenada",
+"KNA": "St Kitts and Nevis",
+"LCA": "St Lucia",
+"VCT": "St Vincent and the Grenadines",
+"DZA": "Algeria",
+"AGO": "Angola",
+"BDI": "Burundi",
+"TCD": "Chad",
+"COM": "Comoros",
+"COG": "Republic of the Congo",
+"DJI": "Djibouti",
+"GAB": "Gabon",
+"GIN": "Guinea",
+"GNB": "Guinea-Bissau",
+"LSO": "Lesotho",
+"LBY": "Libya",
+"MLI": "Mali",
+"MRT": "Mauritania",
+"NER": "Niger",
+"STP": "São Tomé and Príncipe",
+"SYC": "Seychelles",
+"SOM": "Somalia",
+"SDN": "Sudan",
+"SWZ": "Eswatini",
+"KIR": "Kiribati",
+"MHL": "Marshall Islands",
+"FSM": "Micronesia",
+"PLW": "Palau",
+"WSM": "Samoa",
+"TON": "Tonga",
+"TUV": "Tuvalu",
+"BHR": "Bahrain",
+"BRN": "Brunei",
+"OMN": "Oman",
+"QAT": "Qatar",
+"SAU": "Saudi Arabia",
+"ARE": "United Arab Emirates",
+"YEM": "Yemen",
+"LAO": "Laos",
+"MMR": "Myanmar",
+"AFG": "Afghanistan",
+"UZB": "Uzbekistan",
+"TJK": "Tajikistan",
+"MCO": "Monaco",
+"LIE": "Liechtenstein",
+"SMR": "San Marino",
+"HKG": "Hong Kong",
+"MAC": "Macau",
+"GRL": "Greenland",
+"FRO": "Faroe Islands",
+"TKM": "Turkmenistan",
+"ERI": "Eritrea",
+"PRK": "North Korea",
+"GNQ": "Equatorial Guinea",
+"SYR": "Syria",
+"NRU": "Nauru",
+"CAF": "Central African Republic",
+"ALA": "Åland",
+"BMU": "Bermuda",
+"NIU": "Niue",
+"PRI": "Puerto Rico",
+"COK": "Cook Islands",
+"VAT": "Vatican City",
+"JEY": "Jersey",
+"CYM": "Cayman Islands",
+"GIB": "Gibraltar",
+"AIA": "Anguilla",
+"MSR": "Montserrat",
+"XKS": "Kosovo"
+}
+
+_REGION_TERMS = ("protest OR opposition OR lawsuit OR injunction OR permit OR "
+                 "mine OR pipeline OR dam OR drilling OR deforestation OR eviction "
+                 "OR \"environmental impact\" OR indigenous OR land rights")
+
+
+def collect_by_region(per_region=4, budget_min=None, only=None):
+    """One news query per region, tagged with that region's ISO directly.
+    Returns a flat list of wire items. Regions with no news simply return none --
+    but the map still lists them, so the gap is visible rather than hidden."""
+    import time as _t
+    budget_min = budget_min or int(os.environ.get("WIRE_REGION_BUDGET_MIN", "45"))
+    t_end = _t.time() + budget_min * 60
+    isos = list(only or _WIRE_REGIONS.keys())
+    out, seen = [], set()
+    done = 0
+    for iso in isos:
+        if _t.time() > t_end:
+            print("  wire regions: %d-min budget reached at %d/%d" % (budget_min, done, len(isos)))
+            break
+        nm = _WIRE_REGIONS.get(iso) or iso
+        done += 1
+        try:
+            fp = feedparser.parse(google_news('"%s" (%s)' % (nm, _REGION_TERMS)))
+        except Exception as e:
+            print("  wire region %s failed: %s" % (iso, e)); continue
+        kept = 0
+        for e in (fp.entries or [])[:14]:
+            if kept >= per_region:
+                break
+            title = clean(e.get("title")); link = e.get("link", "")
+            if not title or not link:
+                continue
+            blob = title + " " + clean(e.get("summary", ""))
+            if not matches(blob):
+                continue
+            key = re.sub(r"[^a-z0-9]", "", title.lower())[:60]
+            if key in seen:
+                continue
+            seen.add(key)
+            ts = None
+            for k in ("published_parsed", "updated_parsed"):
+                if e.get(k):
+                    try:
+                        ts = int(calendar.timegm(e[k]) * 1000); break
+                    except Exception:
+                        pass
+            out.append({"name": nm, "title": title[:200], "link": link,
+                        "date": ts or int(time.time() * 1000), "sig": 2,
+                        "snippet": clean(e.get("summary", ""))[:280],
+                        "iso": iso, "region": ""})
+            kept += 1
+        if done % 25 == 0:
+            print("  wire regions: %d/%d swept, %d items" % (done, len(isos), len(out)))
+    print("  wire regions: %d items across %d regions swept" % (len(out), done))
+    return out
+
 def main():
+    # topical pool (kept: it surfaces cross-border and movement stories), then a
+    # sweep that gives every region its own query rather than a share of the pool
     items = collect()[:60]
+    if os.environ.get("WIRE_SKIP_REGIONS") != "1":
+        seen = set(re.sub(r"[^a-z0-9]", "", (i.get("title") or "").lower())[:60] for i in items)
+        for it in collect_by_region():
+            k = re.sub(r"[^a-z0-9]", "", (it.get("title") or "").lower())[:60]
+            if k in seen:
+                continue
+            seen.add(k); items.append(it)
+    before = len(items)
+    items = [i for i in items if not _too_old(i.get("date"))]
+    if len(items) != before:
+        print("wire: dropped %d items older than %d days" % (before - len(items), WIRE_MAX_AGE_DAYS))
+    items.sort(key=lambda i: -(i.get("date") or 0))
+    print("wire total: %d items (window: last %d days)" % (len(items), WIRE_MAX_AGE_DAYS))
     for it in items:
         it.pop("score", None)
     # Safety: if too few items came back, keep the existing wire.json rather than wiping it.
