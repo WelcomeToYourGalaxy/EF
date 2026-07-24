@@ -5794,10 +5794,17 @@ def fetch_geonode_federation(per_portal=None, per_ds=800):
             n0 = len(out)
             for f in feats[:per_ds]:
                 try:
-                    ll = _geom_center(f.get("geometry") or {})
+                    _g = f.get("geometry") or {}
+                    # a survey track or boundary drawn as a line is not a project site;
+                    # reducing it to a centroid is what produced those rows of dots
+                    if _g.get("type") in ("LineString", "MultiLineString"):
+                        continue
+                    ll = _geom_center(_g)
                     if not ll:
                         continue
                     props = f.get("properties") or {}
+                    if _layer_is_junk(_ods_pick(props, _ODS_NAMEK) or ""):
+                        continue
                     st = _ods_pick(props, _ODS_STATUSK)
                     sn = str(st or "").lower().replace("_", " ")
                     if any(k in sn for k in _ODS_DEAD):
@@ -7163,6 +7170,30 @@ _WFS_ENDPOINTS = [
     ("https://seagrass.observing.earth/geoserver/ows?service=WFS&version=1.1.0&request=GetCapabilities", "World", "world"),
     ("https://sigpobla.gvsigonline.com/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities", "World", "world"),
 ]
+
+# --- reject layers that are not a project pipeline at all ---------------------
+# The federation crawlers keep a layer if its NAME matches development vocabulary,
+# which lets through statistical grids ("Average MW Fishing hours"), survey cruise
+# tracks ("CV17001 Winter Environmental Survey") and plain administrative geometry
+# ("Communes France"). Those render as grids and transect lines of fake "projects".
+_JUNK_LAYER = _re.compile(
+    r"fishing ?hours|fishing ?effort|effort ?map|vessel ?density|ais |"
+    r"\bsurvey\b|cruise|transect|sampling|station[s]? |monitoring ?network|"
+    r"bathymetr|sea ?bed ?map|habitat ?map|seabed ?substrate|"
+    r"\bgrid\b|raster|hex(agon)?|cell[s]? |statistic|census|indicator|"
+    r"\bcommune[s]?\b|municipalit(y|ies)|admin(istrative)? ?bound|"
+    r"parcel|cadastr[ae]l? ?parcel|land ?register|"
+    r"population|demograph|land ?cover|corine|elevation|contour|"
+    r"protected ?area|natura ?2000|designation|zonage|zoning ?plan",
+    _re.I)
+
+
+def _layer_is_junk(*names):
+    for n in names:
+        if n and _JUNK_LAYER.search(str(n)):
+            return True
+    return False
+
 _WFS_KEEP = _re.compile(
     r"permit|planning|develop|construct|mining|\bmine\b|quarr|pipeline|concession|"
     r"infrastructur|\bproject|licen[cs]e|environ|impact|land ?use|zoning|cadastr|"
@@ -7216,7 +7247,8 @@ def fetch_wfs_federation(per_endpoint=None, per_ds=900):
             cap = _wfs_get(base + sep + "service=WFS&version=1.1.0&request=GetCapabilities")
         except Exception:
             continue
-        layers = [(n, t) for (n, t) in _wfs_typenames(cap) if _WFS_KEEP.search(t) or _WFS_KEEP.search(n)]
+        layers = [(n, t) for (n, t) in _wfs_typenames(cap)
+                  if (_WFS_KEEP.search(t) or _WFS_KEEP.search(n)) and not _layer_is_junk(t, n)]
         got = 0
         for nm, ti in layers:
             if got >= per_endpoint:
@@ -7335,7 +7367,7 @@ def fetch_ogcapi_federation(per_endpoint=6, per_ds=600):
         for c in colls:
             cid = c.get("id") or c.get("name")
             title = str(c.get("title") or cid or "")
-            if cid and (_WFS_KEEP.search(title) or _WFS_KEEP.search(str(cid))):
+            if cid and (_WFS_KEEP.search(title) or _WFS_KEEP.search(str(cid))) and not _layer_is_junk(title, cid):
                 matched.append((cid, title))
         got = 0
         for cid, title in matched[:per_endpoint]:

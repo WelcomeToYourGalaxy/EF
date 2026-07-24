@@ -8,6 +8,7 @@ The map checks Array.isArray(...), so the output MUST be an array, not an object
 Dependency: feedparser  (pip install feedparser)
 """
 import json, time, datetime, html, re, os, calendar
+import urllib.request, urllib.parse
 import feedparser
 
 # ---------------------------------------------------------------------------
@@ -590,6 +591,46 @@ _REGION_TIERS = (
     ("", 365, False, True),
 )
 
+
+# --- GDELT: a global, multilingual news index built for programmatic use ---------
+# Google News RSS throttles hard when queried a couple of hundred times in a run,
+# which is why nearly every region came back empty while a handful of large ones
+# succeeded. GDELT is designed for this access pattern, indexes non-English media,
+# and needs no key -- so it becomes the primary per-region source, with Google News
+# kept as a fallback.
+_GDELT = "https://api.gdeltproject.org/api/v2/doc/doc"
+_UA = {"User-Agent": "local-map-wire/1.0 (+wheelock.chris@gmail.com)"}
+_NET = {"gdelt_ok": 0, "gdelt_fail": 0, "gnews_ok": 0, "gnews_empty": 0}
+
+
+def _gdelt(name, terms, days, maxrec=20):
+    """Return raw article dicts for one region, or [] on failure."""
+    q = '"%s"' % name
+    if terms:
+        q += " (%s)" % terms
+    url = _GDELT + "?" + urllib.parse.urlencode(
+        {"query": q, "mode": "ArtList", "maxrecords": maxrec,
+         "format": "json", "timespan": "%dd" % days, "sort": "DateDesc"})
+    try:
+        req = urllib.request.Request(url, headers=_UA)
+        with urllib.request.urlopen(req, timeout=45) as r:
+            raw = r.read().decode("utf-8", "replace")
+        arts = (json.loads(raw) or {}).get("articles") or []
+        _NET["gdelt_ok"] += 1
+        return arts
+    except Exception as e:
+        _NET["gdelt_fail"] += 1
+        if _NET["gdelt_fail"] <= 5:
+            print("  gdelt %s failed: %s" % (name[:24], str(e)[:70]))
+        return []
+
+
+def _gdelt_date_ms(sd):
+    try:
+        return int(calendar.timegm(time.strptime(str(sd)[:15], "%Y%m%dT%H%M%S")) * 1000)
+    except Exception:
+        return int(time.time() * 1000)
+
 def _gnews_url(q, days, hl="en-US", gl="US"):
     from urllib.parse import quote
     qq = q + (" when:%dd" % days if days else "")
@@ -598,11 +639,12 @@ def _gnews_url(q, days, hl="en-US", gl="US"):
 
 
 def collect_by_region(per_region=6, budget_min=None, only=None):
-    """One sweep per region, tagged with that region's ISO directly, widening the
-    query until something is found. Regions still returning nothing are reported so
-    the gap is visible rather than silently rendered as a zero."""
+    """One sweep per region. GDELT first (multilingual, tolerant of this access
+    pattern), Google News as fallback, widening the window until something lands.
+    Failures are counted and reported rather than silently rendered as a zero."""
     import time as _t
-    budget_min = budget_min or int(os.environ.get("WIRE_REGION_BUDGET_MIN", "75"))
+    budget_min = budget_min or int(os.environ.get("WIRE_REGION_BUDGET_MIN", "90"))
+    pace = float(os.environ.get("WIRE_PACE_SEC", "0.5"))
     t_end = _t.time() + budget_min * 60
     isos = list(only or _WIRE_REGIONS.keys())
     out, seen, empty = [], set(), []
@@ -615,54 +657,96 @@ def collect_by_region(per_region=6, budget_min=None, only=None):
         loc = _REGION_LOCALE.get(iso)
         done += 1
         kept = 0
+
+        def _add(title, link, date_ms, snippet, window):
+            key = re.sub(r"[^a-z0-9]", "", (title or "").lower())[:60]
+            if not title or not link or key in seen:
+                return False
+            seen.add(key)
+            out.append({"name": nm, "title": title[:200], "link": link, "date": date_ms,
+                        "sig": 2, "snippet": (snippet or "")[:280], "iso": iso,
+                        "region": "", "widened": window})
+            return True
+
+        spare = []                       # articles the relevance filter turned away
         for terms, days, need_match, allow_local in _REGION_TIERS:
             if kept >= per_region:
                 break
-            urls = [_gnews_url('"%s" %s' % (nm, ("(%s)" % terms) if terms else ""), days)]
-            if allow_local and loc:
-                urls.append(_gnews_url('"%s" %s' % (nm, ("(%s)" % terms) if terms else ""),
-                                       days, loc[0], loc[1]))
-            for u in urls:
+            for art in _gdelt(nm, terms, days, maxrec=25):
                 if kept >= per_region:
                     break
-                try:
-                    fp = feedparser.parse(u)
-                except Exception:
+                title = clean(art.get("title"))
+                blob = title + " " + clean(art.get("domain", ""))
+                if need_match and not matches(blob):
+                    if len(spare) < 3:
+                        spare.append((art, days))
                     continue
-                for e in (fp.entries or [])[:25]:
+                if _add(title, art.get("url", ""), _gdelt_date_ms(art.get("seendate")),
+                        art.get("domain", ""), days):
+                    kept += 1
+            _t.sleep(pace)
+            if kept >= 1:
+                break
+        # A region that returned articles should never read 0 just because the topic
+        # filter was strict -- large countries were showing empty for exactly this.
+        if kept == 0 and spare:
+            for art, days in spare[:2]:
+                if _add(clean(art.get("title")), art.get("url", ""),
+                        _gdelt_date_ms(art.get("seendate")), art.get("domain", ""), days):
+                    kept += 1
+
+        if kept == 0:                                  # GDELT dry -> try Google News
+            for terms, days, need_match, allow_local in _REGION_TIERS:
+                if kept >= per_region:
+                    break
+                urls = [_gnews_url('"%s" %s' % (nm, ("(%s)" % terms) if terms else ""), days)]
+                if allow_local and loc:
+                    urls.append(_gnews_url('"%s" %s' % (nm, ("(%s)" % terms) if terms else ""),
+                                           days, loc[0], loc[1]))
+                for u in urls:
                     if kept >= per_region:
                         break
-                    title = clean(e.get("title")); link = e.get("link", "")
-                    if not title or not link:
+                    try:
+                        fp = feedparser.parse(u)
+                    except Exception:
                         continue
-                    blob = title + " " + clean(e.get("summary", ""))
-                    if need_match and not matches(blob):
-                        continue
-                    key = re.sub(r"[^a-z0-9]", "", title.lower())[:60]
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    ts = None
-                    for k in ("published_parsed", "updated_parsed"):
-                        if e.get(k):
-                            try:
-                                ts = int(calendar.timegm(e[k]) * 1000); break
-                            except Exception:
-                                pass
-                    out.append({"name": nm, "title": title[:200], "link": link,
-                                "date": ts or int(time.time() * 1000), "sig": 2,
-                                "snippet": clean(e.get("summary", ""))[:280],
-                                "iso": iso, "region": "", "widened": days})
-                    kept += 1
-            if kept >= 1:
-                break                      # tier satisfied: don't widen further
+                    ents = fp.entries or []
+                    if not ents:
+                        _NET["gnews_empty"] += 1          # throttled or genuinely nothing
+                    else:
+                        _NET["gnews_ok"] += 1
+                    for e in ents[:25]:
+                        if kept >= per_region:
+                            break
+                        title = clean(e.get("title"))
+                        blob = title + " " + clean(e.get("summary", ""))
+                        if need_match and not matches(blob):
+                            continue
+                        ts = None
+                        for k in ("published_parsed", "updated_parsed"):
+                            if e.get(k):
+                                try:
+                                    ts = int(calendar.timegm(e[k]) * 1000); break
+                                except Exception:
+                                    pass
+                        if _add(title, e.get("link", ""), ts or int(time.time() * 1000),
+                                clean(e.get("summary", "")), days):
+                            kept += 1
+                    _t.sleep(pace)
+                if kept >= 1:
+                    break
+
         if kept == 0:
             empty.append(iso)
         if done % 25 == 0:
-            print("  wire regions: %d/%d swept, %d items, %d still empty"
-                  % (done, len(isos), len(out), len(empty)))
-    print("  wire regions: %d items across %d regions; %d returned nothing%s"
-          % (len(out), done, len(empty), (" (" + ",".join(empty[:20]) + ")") if empty else ""))
+            print("  wire regions: %d/%d swept, %d items, %d empty  [gdelt ok=%d fail=%d | gnews ok=%d empty=%d]"
+                  % (done, len(isos), len(out), len(empty),
+                     _NET["gdelt_ok"], _NET["gdelt_fail"], _NET["gnews_ok"], _NET["gnews_empty"]))
+    print("  wire regions: %d items across %d swept; %d returned nothing" % (len(out), done, len(empty)))
+    print("  network: gdelt ok=%d fail=%d | gnews ok=%d empty=%d"
+          % (_NET["gdelt_ok"], _NET["gdelt_fail"], _NET["gnews_ok"], _NET["gnews_empty"]))
+    if empty:
+        print("  still empty: %s" % ",".join(empty[:40]))
     return out
 
 
@@ -678,11 +762,29 @@ def main():
             if k in seen:
                 continue
             seen.add(k); items.append(it)
+    # Carry forward what earlier runs found. A region that lands once stays covered
+    # even if a later sweep is throttled, so coverage accumulates instead of resetting.
+    if os.environ.get("WIRE_NO_MERGE") != "1" and os.path.exists("wire.json"):
+        try:
+            prev = json.load(open("wire.json", encoding="utf-8"))
+            if isinstance(prev, list):
+                have = set(re.sub(r"[^a-z0-9]", "", (i.get("title") or "").lower())[:60] for i in items)
+                added = 0
+                for p in prev:
+                    k = re.sub(r"[^a-z0-9]", "", (p.get("title") or "").lower())[:60]
+                    if k and k not in have and not _too_old(p):
+                        have.add(k); items.append(p); added += 1
+                print("merged %d still-current items from the previous wire" % added)
+        except Exception as e:
+            print("merge skipped: %s" % e)
     before = len(items)
     items = [i for i in items if not _too_old(i)]
     if len(items) != before:
         print("wire: dropped %d items older than %d days" % (before - len(items), WIRE_MAX_AGE_DAYS))
     items.sort(key=lambda i: -(i.get("date") or 0))
+    cap = int(os.environ.get("WIRE_MAX_ITEMS", "4000"))
+    if len(items) > cap:
+        items = items[:cap]
     wide = sum(1 for i in items if (i.get("widened") or WIRE_MAX_AGE_DAYS) > WIRE_MAX_AGE_DAYS)
     covered = len(set(i.get("iso") for i in items if i.get("iso")))
     print("wire total: %d items across %d regions (base window %d days; %d found by widening)"
