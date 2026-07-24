@@ -216,9 +216,17 @@ FRONTS = [
 WIRE_MAX_AGE_DAYS = int(os.environ.get("WIRE_MAX_AGE_DAYS", "30"))
 
 
-def _too_old(date_ms):
+def _too_old(item):
+    """Drop by the window the item was actually gathered under. Regions with thin
+    coverage are searched further back, so a blanket 30-day cut would delete exactly
+    the items the widening was meant to find."""
     try:
-        return (time.time() * 1000 - float(date_ms)) > WIRE_MAX_AGE_DAYS * 86400000.0
+        if isinstance(item, dict):
+            days = int(item.get("widened") or WIRE_MAX_AGE_DAYS)
+            date_ms = item.get("date")
+        else:
+            days, date_ms = WIRE_MAX_AGE_DAYS, item
+        return (time.time() * 1000 - float(date_ms)) > days * 86400000.0
     except Exception:
         return False
 
@@ -540,56 +548,124 @@ _REGION_TERMS = ("protest OR opposition OR lawsuit OR injunction OR permit OR "
                  "OR \"environmental impact\" OR indigenous OR land rights")
 
 
+
+# Google News locale per region, so a sweep for, say, Senegal or Vietnam searches in
+# the language the coverage is actually published in. Anything not listed falls back
+# to English, which is fine for anglophone and small-media states.
+_REGION_LOCALE = {
+ "BRA":("pt-BR","BR"),"PRT":("pt-PT","PT"),"AGO":("pt-PT","AO"),"MOZ":("pt-PT","MZ"),
+ "ESP":("es","ES"),"MEX":("es-419","MX"),"ARG":("es-419","AR"),"COL":("es-419","CO"),
+ "CHL":("es-419","CL"),"PER":("es-419","PE"),"VEN":("es-419","VE"),"ECU":("es-419","EC"),
+ "BOL":("es-419","BO"),"GTM":("es-419","GT"),"HND":("es-419","HN"),"NIC":("es-419","NI"),
+ "CRI":("es-419","CR"),"PAN":("es-419","PA"),"DOM":("es-419","DO"),"URY":("es-419","UY"),
+ "PRY":("es-419","PY"),"SLV":("es-419","SV"),"CUB":("es-419","CU"),
+ "FRA":("fr","FR"),"BEL":("fr","BE"),"SEN":("fr","SN"),"CIV":("fr","CI"),"MLI":("fr","ML"),
+ "BFA":("fr","BF"),"NER":("fr","NE"),"TCD":("fr","TD"),"CMR":("fr","CM"),"GAB":("fr","GA"),
+ "COG":("fr","CG"),"COD":("fr","CD"),"MDG":("fr","MG"),"GIN":("fr","GN"),"BEN":("fr","BJ"),
+ "TGO":("fr","TG"),"HTI":("fr","HT"),
+ "DEU":("de","DE"),"AUT":("de","AT"),"CHE":("de","CH"),"ITA":("it","IT"),"NLD":("nl","NL"),
+ "POL":("pl","PL"),"SWE":("sv","SE"),"NOR":("no","NO"),"DNK":("da","DK"),"FIN":("fi","FI"),
+ "GRC":("el","GR"),"ROU":("ro","RO"),"CZE":("cs","CZ"),"HUN":("hu","HU"),"BGR":("bg","BG"),
+ "HRV":("hr","HR"),"SRB":("sr","RS"),"SVK":("sk","SK"),"SVN":("sl","SI"),"UKR":("uk","UA"),
+ "RUS":("ru","RU"),"BLR":("ru","BY"),"KAZ":("ru","KZ"),"UZB":("ru","UZ"),
+ "TUR":("tr","TR"),"IRN":("fa","IR"),"ISR":("he","IL"),
+ "SAU":("ar","SA"),"EGY":("ar","EG"),"ARE":("ar","AE"),"IRQ":("ar","IQ"),"JOR":("ar","JO"),
+ "DZA":("ar","DZ"),"MAR":("ar","MA"),"TUN":("ar","TN"),"LBY":("ar","LY"),"LBN":("ar","LB"),
+ "KWT":("ar","KW"),"QAT":("ar","QA"),"OMN":("ar","OM"),"YEM":("ar","YE"),"SDN":("ar","SD"),
+ "CHN":("zh-CN","CN"),"TWN":("zh-TW","TW"),"JPN":("ja","JP"),"KOR":("ko","KR"),
+ "IDN":("id","ID"),"THA":("th","TH"),"VNM":("vi","VN"),"MMR":("my","MM"),"KHM":("km","KH"),
+ "IND":("hi","IN"),"PAK":("ur","PK"),"BGD":("bn","BD"),"NPL":("ne","NP"),"LKA":("si","LK"),
+ "ETH":("am","ET"),"TZA":("sw","TZ"),"KEN":("sw","KE"),
+}
+
+# Progressive widening. A single 30-day English query returns nothing at all for small
+# or non-anglophone states, which is why almost every region read 0. Each region walks
+# these tiers until it finds something: tighter and more recent first, then broader
+# terms, a longer window, the local language, and finally the bare region name.
+_REGION_TIERS = (
+    (_REGION_TERMS, 30,  True,  False),
+    (_REGION_TERMS, 120, True,  True),
+    ("environment OR mining OR forest OR water OR pollution OR land OR energy", 180, True, True),
+    ("environment OR land OR water OR development", 365, False, True),
+    ("", 365, False, True),
+)
+
+def _gnews_url(q, days, hl="en-US", gl="US"):
+    from urllib.parse import quote
+    qq = q + (" when:%dd" % days if days else "")
+    return ("https://news.google.com/rss/search?q=%s&hl=%s&gl=%s&ceid=%s:%s"
+            % (quote(qq), hl, gl, gl, hl.split("-")[0]))
+
+
 def collect_by_region(per_region=6, budget_min=None, only=None):
-    """One news query per region, tagged with that region's ISO directly.
-    Returns a flat list of wire items. Regions with no news simply return none --
-    but the map still lists them, so the gap is visible rather than hidden."""
+    """One sweep per region, tagged with that region's ISO directly, widening the
+    query until something is found. Regions still returning nothing are reported so
+    the gap is visible rather than silently rendered as a zero."""
     import time as _t
-    budget_min = budget_min or int(os.environ.get("WIRE_REGION_BUDGET_MIN", "45"))
+    budget_min = budget_min or int(os.environ.get("WIRE_REGION_BUDGET_MIN", "75"))
     t_end = _t.time() + budget_min * 60
     isos = list(only or _WIRE_REGIONS.keys())
-    out, seen = [], set()
+    out, seen, empty = [], set(), []
     done = 0
     for iso in isos:
         if _t.time() > t_end:
             print("  wire regions: %d-min budget reached at %d/%d" % (budget_min, done, len(isos)))
             break
         nm = _WIRE_REGIONS.get(iso) or iso
+        loc = _REGION_LOCALE.get(iso)
         done += 1
-        try:
-            fp = feedparser.parse(google_news('"%s" (%s)' % (nm, _REGION_TERMS)))
-        except Exception as e:
-            print("  wire region %s failed: %s" % (iso, e)); continue
         kept = 0
-        for e in (fp.entries or [])[:25]:
+        for terms, days, need_match, allow_local in _REGION_TIERS:
             if kept >= per_region:
                 break
-            title = clean(e.get("title")); link = e.get("link", "")
-            if not title or not link:
-                continue
-            blob = title + " " + clean(e.get("summary", ""))
-            if not matches(blob):
-                continue
-            key = re.sub(r"[^a-z0-9]", "", title.lower())[:60]
-            if key in seen:
-                continue
-            seen.add(key)
-            ts = None
-            for k in ("published_parsed", "updated_parsed"):
-                if e.get(k):
-                    try:
-                        ts = int(calendar.timegm(e[k]) * 1000); break
-                    except Exception:
-                        pass
-            out.append({"name": nm, "title": title[:200], "link": link,
-                        "date": ts or int(time.time() * 1000), "sig": 2,
-                        "snippet": clean(e.get("summary", ""))[:280],
-                        "iso": iso, "region": ""})
-            kept += 1
+            urls = [_gnews_url('"%s" %s' % (nm, ("(%s)" % terms) if terms else ""), days)]
+            if allow_local and loc:
+                urls.append(_gnews_url('"%s" %s' % (nm, ("(%s)" % terms) if terms else ""),
+                                       days, loc[0], loc[1]))
+            for u in urls:
+                if kept >= per_region:
+                    break
+                try:
+                    fp = feedparser.parse(u)
+                except Exception:
+                    continue
+                for e in (fp.entries or [])[:25]:
+                    if kept >= per_region:
+                        break
+                    title = clean(e.get("title")); link = e.get("link", "")
+                    if not title or not link:
+                        continue
+                    blob = title + " " + clean(e.get("summary", ""))
+                    if need_match and not matches(blob):
+                        continue
+                    key = re.sub(r"[^a-z0-9]", "", title.lower())[:60]
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    ts = None
+                    for k in ("published_parsed", "updated_parsed"):
+                        if e.get(k):
+                            try:
+                                ts = int(calendar.timegm(e[k]) * 1000); break
+                            except Exception:
+                                pass
+                    out.append({"name": nm, "title": title[:200], "link": link,
+                                "date": ts or int(time.time() * 1000), "sig": 2,
+                                "snippet": clean(e.get("summary", ""))[:280],
+                                "iso": iso, "region": "", "widened": days})
+                    kept += 1
+            if kept >= 1:
+                break                      # tier satisfied: don't widen further
+        if kept == 0:
+            empty.append(iso)
         if done % 25 == 0:
-            print("  wire regions: %d/%d swept, %d items" % (done, len(isos), len(out)))
-    print("  wire regions: %d items across %d regions swept" % (len(out), done))
+            print("  wire regions: %d/%d swept, %d items, %d still empty"
+                  % (done, len(isos), len(out), len(empty)))
+    print("  wire regions: %d items across %d regions; %d returned nothing%s"
+          % (len(out), done, len(empty), (" (" + ",".join(empty[:20]) + ")") if empty else ""))
     return out
+
+
 
 def main():
     # topical pool (kept: it surfaces cross-border and movement stories), then a
@@ -603,11 +679,14 @@ def main():
                 continue
             seen.add(k); items.append(it)
     before = len(items)
-    items = [i for i in items if not _too_old(i.get("date"))]
+    items = [i for i in items if not _too_old(i)]
     if len(items) != before:
         print("wire: dropped %d items older than %d days" % (before - len(items), WIRE_MAX_AGE_DAYS))
     items.sort(key=lambda i: -(i.get("date") or 0))
-    print("wire total: %d items (window: last %d days)" % (len(items), WIRE_MAX_AGE_DAYS))
+    wide = sum(1 for i in items if (i.get("widened") or WIRE_MAX_AGE_DAYS) > WIRE_MAX_AGE_DAYS)
+    covered = len(set(i.get("iso") for i in items if i.get("iso")))
+    print("wire total: %d items across %d regions (base window %d days; %d found by widening)"
+          % (len(items), covered, WIRE_MAX_AGE_DAYS, wide))
     for it in items:
         it.pop("score", None)
     # Safety: if too few items came back, keep the existing wire.json rather than wiping it.
