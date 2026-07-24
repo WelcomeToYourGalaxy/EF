@@ -3317,10 +3317,12 @@ def fetch_ireland_eia(pages=10, per=2000):
                      "company": who,
                      "url": url,
                      "date": (_iso_date(pr.get(fields["date"])) if fields["date"] else ""),
-                     "desc": ("Irish development that triggered a full Environmental Impact "
-                              "Assessment (EU Directive 2014/52/EU) -- the largest projects: "
-                              "roads, quarries, energy, waste, big housing. Open the planning "
-                              "authority's file for the EIAR and the public-participation window."),
+                     "desc": ("Large enough to require a full Environmental Impact Assessment "
+                              "Report (EIAR) under EU Directive 2014/52/EU -- the threshold that "
+                              "catches major roads, quarries, energy, waste and large housing "
+                              "schemes. The EIAR, the submissions window and the decision are on "
+                              "the planning authority's file; observations from any member of the "
+                              "public must be considered before permission issues."),
                      "source": "ireland_eia"}
                 p["impact"] = rate_project(p, sensitivity=1)
                 out.append(p)
@@ -3838,7 +3840,23 @@ _JUNK_NAME_VALS = {"", "yes", "no", "y", "n", "true", "false", "none", "n/a", "n
                    "0", "1", "other", "misc", "various"}
 
 
+_ADMIN_WORDS = {
+    "file", "files", "reg", "regs", "register", "registration", "ref", "refs",
+    "reference", "doc", "docs", "document", "documents", "form", "forms", "case",
+    "cases", "folder", "sheet", "table", "column", "field", "fields", "row", "rows",
+    "index", "key", "code", "codes", "serial", "batch", "lot", "seq", "sequence",
+    "version", "revision", "draft", "copy", "page", "part", "section", "appendix",
+    "attachment", "record", "records", "entry", "item", "number", "no", "num", "id",
+    "detail", "details", "description", "status", "stage", "phase", "decision",
+    "outcome", "result", "pending", "active", "current", "new", "old", "test",
+    "sample", "default", "temp", "temporary", "placeholder", "blank", "empty",
+    "project", "projects", "development", "site", "type", "other", "misc", "various",
+}
+
+
 def _looks_like_name(v):
+    """True only if the value reads like a real title. Rejects flags ("Yes"/"No"),
+    bare numbers, and admin/metadata scraps ("File Reg", "no. 2", "Doc 12")."""
     s = str(v if v is not None else "").strip().strip(".")
     if not s:
         return False
@@ -3848,7 +3866,15 @@ def _looks_like_name(v):
         return False
     if s.replace(".", "").replace("-", "").replace(" ", "").isdigit():
         return False
-    return bool(re.search(r"[A-Za-z]{3,}", s))
+    if not re.search(r"[A-Za-z]{3,}", s):
+        return False
+    # needs at least one word that is not admin boilerplate and not a bare number
+    for tok in re.split(r"[^A-Za-z0-9]+", s.lower()):
+        if not tok or tok.isdigit():
+            continue
+        if tok not in _ADMIN_WORDS and len(tok) >= 3:
+            return True
+    return False
 
 
 def _name_col_score(rows, c):
@@ -7223,10 +7249,33 @@ def fetch_wfs_federation(per_endpoint=None, per_ds=900):
                     if any(k in sn for k in _ODS_DEAD):
                         continue
                     nmv = _ods_pick(props, _ODS_NAMEK) or ti
-                    p = {"name": nmv[:140], "type": "Geospatial dataset (%s)" % country,
+                    # a bare /ows endpoint returns an OWS ExceptionReport in a browser
+                    # ("No service: ( ows )"), so publish a real GetFeature request
+                    src = base + sep + urllib.parse.urlencode(
+                        {"service": "WFS", "version": "1.1.0", "request": "GetFeature",
+                         "typeName": nm, "outputFormat": "application/json",
+                         "maxFeatures": 50})
+                    # carry the feature's own attributes through instead of dropping them
+                    det = []
+                    for k, v in list(props.items()):
+                        if v in (None, "", []):
+                            continue
+                        ks = str(k)
+                        if ks.lower() in ("geometry", "the_geom", "bbox", "shape"):
+                            continue
+                        vs = str(v).strip()
+                        if len(vs) > 90 or not vs:
+                            continue
+                        det.append("%s: %s" % (ks, vs))
+                        if len(det) >= 10:
+                            break
+                    dtxt = "From %s spatial data (WFS) \u00b7 layer '%s'." % (country, ti[:60])
+                    if det:
+                        dtxt += " " + " \u00b7 ".join(det)
+                    p = {"name": nmv[:140], "type": ("%s \u2014 %s" % (ti[:48], country)) if ti else "Geospatial dataset (%s)" % country,
                          "state": country, "lat": round(ll[0], 5), "lng": round(ll[1], 5),
                          "precise": True, "size": "", "status": st[:40], "company": "",
-                         "url": base, "desc": "From %s spatial data (WFS) \u00b7 %s." % (country, ti[:60]),
+                         "url": src, "desc": dtxt[:600],
                          "source": "wfs_%s" % cc}
                     p["impact"] = rate_project(p, sensitivity=0)
                     out.append(p)
