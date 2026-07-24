@@ -223,6 +223,21 @@ def _too_old(date_ms):
         return False
 
 
+
+# The map keys everything by alpha-3 ISO; the geo-tagger's country table is alpha-2,
+# so items tagged by keyword could never match a region in the panel and every
+# count read 0. Normalise on the way out so both pools speak the same code space.
+_A2TO3 = {"AE": "ARE", "AF": "AFG", "AM": "ARM", "AO": "AGO", "AR": "ARG", "AT": "AUT", "AU": "AUS", "AZ": "AZE", "BD": "BGD", "BE": "BEL", "BO": "BOL", "BR": "BRA", "BW": "BWA", "CA": "CAN", "CD": "COD", "CH": "CHE", "CL": "CHL", "CM": "CMR", "CN": "CHN", "CO": "COL", "CR": "CRI", "CZ": "CZE", "DE": "DEU", "DK": "DNK", "DO": "DOM", "DZ": "DZA", "EC": "ECU", "EG": "EGY", "ES": "ESP", "ET": "ETH", "FI": "FIN", "FJ": "FJI", "FR": "FRA", "GB": "GBR", "GE": "GEO", "GH": "GHA", "GR": "GRC", "GT": "GTM", "HN": "HND", "HU": "HUN", "ID": "IDN", "IE": "IRL", "IL": "ISR", "IN": "IND", "IQ": "IRQ", "IR": "IRN", "IT": "ITA", "JO": "JOR", "JP": "JPN", "KE": "KEN", "KR": "KOR", "KZ": "KAZ", "LB": "LBN", "LK": "LKA", "LY": "LBY", "MA": "MAR", "MG": "MDG", "ML": "MLI", "MM": "MMR", "MN": "MNG", "MX": "MEX", "MY": "MYS", "MZ": "MOZ", "NA": "NAM", "NG": "NGA", "NI": "NIC", "NL": "NLD", "NO": "NOR", "NP": "NPL", "NZ": "NZL", "PA": "PAN", "PE": "PER", "PG": "PNG", "PH": "PHL", "PK": "PAK", "PL": "POL", "PS": "PSE", "PT": "PRT", "RO": "ROU", "RS": "SRB", "RU": "RUS", "RW": "RWA", "SA": "SAU", "SD": "SDN", "SE": "SWE", "SN": "SEN", "SY": "SYR", "TH": "THA", "TN": "TUN", "TR": "TUR", "TW": "TWN", "TZ": "TZA", "UA": "UKR", "UG": "UGA", "US": "USA", "UZ": "UZB", "VE": "VEN", "VN": "VNM", "YE": "YEM", "ZA": "ZAF", "ZM": "ZMB", "ZW": "ZWE"}
+
+
+def _iso3(code):
+    if not code:
+        return code
+    c = str(code).upper()
+    if c == "GL" or len(c) == 3:
+        return c
+    return _A2TO3.get(c, c)
+
 def google_news(q):
     from urllib.parse import quote
     return ("Front: " + q,
@@ -292,6 +307,7 @@ def collect():
             if not date_ms:
                 date_ms = int(time.time() * 1000)
             _iso, _region = _geo_tag(title + " " + summary)
+            _iso = _iso3(_iso)
             items.append({"name": name, "title": title[:200], "link": link,
                           "date": date_ms, "sig": weight, "snippet": summary[:280],
                           "iso": _iso, "region": _region, "score": score})
@@ -524,7 +540,7 @@ _REGION_TERMS = ("protest OR opposition OR lawsuit OR injunction OR permit OR "
                  "OR \"environmental impact\" OR indigenous OR land rights")
 
 
-def collect_by_region(per_region=4, budget_min=None, only=None):
+def collect_by_region(per_region=6, budget_min=None, only=None):
     """One news query per region, tagged with that region's ISO directly.
     Returns a flat list of wire items. Regions with no news simply return none --
     but the map still lists them, so the gap is visible rather than hidden."""
@@ -545,7 +561,7 @@ def collect_by_region(per_region=4, budget_min=None, only=None):
         except Exception as e:
             print("  wire region %s failed: %s" % (iso, e)); continue
         kept = 0
-        for e in (fp.entries or [])[:14]:
+        for e in (fp.entries or [])[:25]:
             if kept >= per_region:
                 break
             title = clean(e.get("title")); link = e.get("link", "")
